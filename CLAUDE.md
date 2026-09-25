@@ -42,13 +42,20 @@
 
 ```bash
 uv sync --group dev
-uv run --group dev pytest tests/ -q        # 127 个测试；PG 测试库没起时跳过其中 19 个
+uv run --group dev pytest tests/ -q        # 158 个测试；PG 测试库没起时跳过其中 24 个
 docker compose -f tests/pg/docker-compose.yml up -d --wait   # PG 集成测试库（tmpfs，不落盘）
 docker compose -f tests/pg/docker-compose.yml down
 uv run python smoke.py                     # 端到端验证网关（极少量花费）
 
-# 评测（会花钱，先问）
+# 评测（会花钱，先问；跑之前先提交代码）
 uv run python -m eval.runner --dataset eval/datasets/bird/dev_20240627 \
+    --limit 250 --seed 0 --workers 2 --label <实验名>
+#   当前最好配置（2.1 + 2.2）再加 --column-descriptions --column-values
+
+# Mini-Dev PostgreSQL 评测（先起评测库，每次启动导入约 4 分钟）
+docker compose -f eval/pg/docker-compose.yml up -d --wait
+uv run python -m eval.runner --dataset eval/datasets/bird_minidev/minidev/MINIDEV \
+    --questions mini_dev_postgresql.json --pg-dsn postgresql://agent_ro:agent_ro@127.0.0.1:55433/bird \
     --limit 250 --seed 0 --workers 2 --label <实验名>
 
 # 管线自检（6 题，几乎不花钱）
@@ -59,5 +66,7 @@ uv run python -m eval.runner --dataset eval/datasets/mini --limit 6 --label mini
 
 - Windows 控制台中文乱码：命令前加 `PYTHONIOENCODING=utf-8`
 - uv 缓存在 `D:\xs\uv-cache`（`UV_CACHE_DIR`），C 盘空间紧张，不要往 C 盘写大文件
-- 网关并发 4 会返回 503，评测默认并发 2
+- 网关并发 4 会返回 503，评测默认并发 2；两个评测不能同时跑
+- 网关 credit 单价会波动（同一天内也会），实验间比较成本按固定单价折算，见 `docs/EVAL.md` 4.1 和 D20
+- 同配置重跑约 25 题翻转，结论看逐题配对显著性，不看准确率差
 - `.env` 含 key，不进 git
