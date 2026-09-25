@@ -215,3 +215,13 @@ def test_cursor_plans_like_direct_execution():
         assert conn.execute("SHOW cursor_tuple_fraction").fetchone() == ("1",)
     finally:
         conn.close()
+
+
+def test_column_values_on_postgres():
+    from agent.schema import column_values
+
+    v = column_values(RO_DSN)
+    assert v[("products", "product name")] in (
+        "全部取值：'Widget', 'Gadget'", "全部取值：'Gadget', 'Widget'"
+    )
+    assert v[("orders", "status")].startswith("全部取值：")
