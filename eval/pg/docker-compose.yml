@@ -1,0 +1,37 @@
+# BIRD Mini-Dev 的 PostgreSQL 评测库。账号密码只用于本机评测，端口只绑本机。
+#
+#   docker compose -f eval/pg/docker-compose.yml up -d --wait    # 每次启动都要重新导入约 1GB，几分钟
+#   docker compose -f eval/pg/docker-compose.yml down
+#
+# 数据目录放在 tmpfs（内存）：不往 C 盘的 Docker 磁盘镜像里写几 GB 数据，代价是每次启动重新导入。
+# 初始化脚本按文件名顺序执行，任何一步出错整个初始化就停下（官方镜像的 ON_ERROR_STOP）。
+# 显式项目名：compose 默认用目录名，tests/pg 和 eval/pg 都叫 pg，会互相替换对方的容器。
+name: agent-pg-bird
+services:
+  pg:
+    image: postgres:16-alpine
+    container_name: agent-pg-bird
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bird
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - ./00-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
+      - ../datasets/bird_minidev/minidev/MINIDEV_postgresql/BIRD_dev.sql:/docker-entrypoint-initdb.d/10-bird.sql:ro
+      - ./20-split-schemas.sql:/docker-entrypoint-initdb.d/20-split-schemas.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    # 评测要求同一条 SQL 每次结果相同，关掉两处不确定性（实测过）：
+    # - 并行查询：并行聚合的求和顺序不固定，单精度 REAL 的 SUM 两次能差到小数点后第二位；
+    # - 同步扫描：大表的顺序扫描会从别的扫描读到的位置接着开始，没有 ORDER BY 的行序、
+    #   并列值里 LIMIT 取到哪一行，每次都可能不同。
+    command: postgres -c max_parallel_workers_per_gather=0 -c synchronize_seqscans=off
+    shm_size: 1g
+    healthcheck:
+      # 必须走 TCP：初始化期间的临时服务只监听 unix socket，走 socket 会在导入完成前就报健康。
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d bird"]
+      interval: 5s
+      timeout: 3s
+      retries: 180
