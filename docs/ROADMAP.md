@@ -122,7 +122,7 @@ Web 界面投入控制在两天内。
 | 1 | `trace/` 包名遮蔽标准库 `trace` 模块 | 写这个模块前改名为 `tracing/` | 低，目前是空包 |
 | 2 | ~~`.idea/` 未加入 `.gitignore`~~ | ✅ 09-25 已加入 | — |
 | 3 | ~~项目还没有任何 git 提交~~ | ✅ 09-25 初始提交，推到 `github.com/EnvySage/Text-to-Sql`；之后每个阶段一个提交 | — |
-| 4 | 结果文件没记录口径版本和 git commit | runner 汇总行加 `metric_version`、`git_commit` | 旧结果与新结果可能不可比而无从察觉 |
+| 4 | ~~结果文件没记录口径版本和 git commit~~ | ✅ 09-25 汇总行已加 `git_commit`（带 `+dirty` 标记）、`metric_version` | — |
 | 5 | 口径比官方严（行重复敏感），无法和排行榜对照 | 同时输出一个官方口径的准确率 | 对外引用数字时需要 |
 | 6 | `config/pricing.yaml` 的价格未核实 | 目前网关上报实际扣费，不影响；换厂商前核实 | 暂无 |
 | 7 | `needs_order` 启发式的误判率未量化 | 抽查 50 题人工标注 | 影响准确率的可信度 |

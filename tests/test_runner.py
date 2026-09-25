@@ -60,3 +60,12 @@ def test_breaker_with_two_workers_stops_dispatching():
     # 要保证的是：确实提前停了，而且已经跑完的成功题一条不丢。
     assert len(records) < 20
     assert sum(r.correct for r in records) == 10
+
+
+def test_git_version_names_a_commit():
+    """结果文件靠它追溯代码版本：在仓库里跑必须拿到 commit 号，不能是 unknown。"""
+    import re
+
+    from eval.runner import git_version
+
+    assert re.fullmatch(r"[0-9a-f]{7,}(\+dirty)?", git_version())

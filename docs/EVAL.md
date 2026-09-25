@@ -120,14 +120,15 @@ baseline 250 题中有 1 题作废。
 
 路径：`eval/results/<label>-<YYYYMMDD-HHMMSS>.jsonl`
 
-- 第 1 行：本次运行的汇总与参数（label、model、n、limit、seed、sample_rows、dialect、questions、accuracy、exec_rate、cost、cost_unit、gold_failed、wall_s、completed、aborted）
+- 第 1 行：本次运行的汇总与参数（label、model、n、limit、seed、sample_rows、dialect、questions、accuracy、exec_rate、cost、cost_unit、gold_failed、wall_s、completed、aborted、git_commit、metric_version）
+- `git_commit` 带 `+dirty` 表示跑的时候有未提交的代码改动，这种结果不可复现，正式实验前先提交
 - **熔断**：连续 3 题模型调用失败（通常是限流）时 runner 停止派发新题，已完成的照常写盘，`aborted` 记录原因。`aborted` 非空的结果文件**数字不得引用**，只作为逐题明细保留
 - 第 2 行起：每题一条 `Record`，字段见 `eval/runner.py`
 
 结果文件**进 git**，是所有结论的原始证据。不要删除旧结果，即使它来自有 bug 的版本——
 修复前后的对照本身有价值（例如 `probe` 与 `probe2`）。
 
-⚠️ 当前汇总行缺少「口径版本」和「代码版本（git commit）」，见 ROADMAP 待决事项。
+09-25 之前的结果文件没有 `git_commit` / `metric_version` 字段：它们的代码都在初始提交 `9e22287` 之前，口径为 `2026-09-20`。
 
 ## 7. 新增一个实验的流程
 
@@ -189,4 +190,5 @@ baseline 250 题中有 1 题作废。
 | 日期 | 变更 | 影响 |
 |---|---|---|
 | 09-20 | 初版 | — |
+| 09-25 | 结果文件汇总行新增 `git_commit`、`metric_version`（口径版本 `2026-09-20`，规则未变） | 无 |
 | 09-25 | 新增 Mini-Dev 多方言评测（1.1 节）；runner 支持 PG | 不影响已有数字：SQLite 路径逐条验证一致，见 D14、D15 |

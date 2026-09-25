@@ -23,6 +23,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
+# 比对口径的版本号，写进每个结果文件。改下面任何一条比对规则都必须同时改它，
+# 并在 docs/EVAL.md「口径变更记录」登记——版本号不同的两个准确率不能直接比较。
+METRIC_VERSION = "2026-09-20"
+
 FLOAT_PRECISION = 4
 
 
