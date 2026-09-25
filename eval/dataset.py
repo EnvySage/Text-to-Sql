@@ -40,6 +40,22 @@ class Item:
     difficulty: str = ""
     # SQLite 文件路径，或 PostgreSQL 连接地址；交给 sandbox.open_sandbox 按类型选执行器
     db: Path | str | None = None
+    # BIRD 的列说明目录（database_description/），没有就是 None
+    desc_dir: Path | None = None
+
+
+@lru_cache(maxsize=64)
+def _desc_index(root: Path) -> dict[str, Path]:
+    """库名 → 列说明目录。
+
+    BIRD 的发布包里有 macOS 打包留下的 ``__MACOSX/``，里面有同名的
+    ``database_description`` 目录，装的是 ``._*.csv`` 元数据垃圾，必须排除。
+    """
+    return {
+        p.parent.name: p
+        for p in sorted(root.glob("**/database_description"))
+        if p.is_dir() and "__MACOSX" not in p.parts
+    }
 
 
 @lru_cache(maxsize=64)
@@ -80,6 +96,7 @@ def load_bird(
 
     raw = json.loads(qpath.read_text(encoding="utf-8"))
     index = {} if pg_dsn else _db_index(root)
+    descs = _desc_index(root)
 
     items: list[Item] = []
     missing: set[str] = set()
@@ -100,6 +117,7 @@ def load_bird(
                 evidence=r.get("evidence", "") or "",
                 difficulty=r.get("difficulty", "") or "",
                 db=db,
+                desc_dir=descs.get(db_id),
             )
         )
 

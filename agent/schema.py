@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from retrieval.descriptions import normalize
 from sandbox import dialect_of
 from sandbox.postgres import connect_readonly
 
@@ -121,11 +122,16 @@ def _load_schema_postgres(dsn: str, *, sample_rows: int) -> list[Table]:
         conn.close()
 
 
-def render_schema(tables: list[Table]) -> str:
+def render_schema(
+    tables: list[Table], descriptions: dict[tuple[str, str], str] | None = None
+) -> str:
     """渲染成 CREATE TABLE 风格的文本。
 
     用 DDL 而不是自然语言描述：模型在预训练里见过海量 DDL，
     这种格式它最熟，也最省 token。
+
+    ``descriptions`` 是 ``{(表, 列): 说明}``（键经过 ``normalize``），以行尾注释拼在列后面，
+    说明和列紧挨着，模型不用在两段文字之间来回对照。
     """
     blocks: list[str] = []
     for t in tables:
@@ -133,7 +139,9 @@ def render_schema(tables: list[Table]) -> str:
         for i, c in enumerate(t.columns):
             tail = "," if i < len(t.columns) - 1 else ""
             pk = " PRIMARY KEY" if c.pk else ""
-            lines.append(f"  {c.name} {c.type}{pk}{tail}")
+            note = (descriptions or {}).get((normalize(t.name), normalize(c.name)))
+            comment = f" -- {note}" if note else ""
+            lines.append(f"  {c.name} {c.type}{pk}{tail}{comment}")
         lines.append(");")
         if t.sample_rows:
             head = ", ".join(c.name for c in t.columns)
@@ -145,5 +153,10 @@ def render_schema(tables: list[Table]) -> str:
     return "\n\n".join(blocks)
 
 
-def schema_text(db: str | Path, *, sample_rows: int = 0) -> str:
-    return render_schema(load_schema(db, sample_rows=sample_rows))
+def schema_text(
+    db: str | Path,
+    *,
+    sample_rows: int = 0,
+    descriptions: dict[tuple[str, str], str] | None = None,
+) -> str:
+    return render_schema(load_schema(db, sample_rows=sample_rows), descriptions)
