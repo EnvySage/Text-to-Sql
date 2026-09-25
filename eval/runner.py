@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import subprocess
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -35,7 +36,7 @@ from rich.table import Table
 from agent.baseline_dialect import generate_sql
 from agent.schema import schema_text
 from eval.dataset import Item, load_bird
-from eval.metrics import needs_order, result_match
+from eval.metrics import METRIC_VERSION, needs_order, result_match
 from llm.base import LLMError, Usage
 from llm.router import Router
 from sandbox import open_sandbox
@@ -195,6 +196,26 @@ def run_all(
     return records, aborted
 
 
+def git_version() -> str:
+    """当前代码版本：短 commit 号，工作区有未提交改动时加 ``+dirty``。
+
+    结果文件靠它追溯"这个数字是哪版代码跑出来的"。``eval/results/`` 不算改动：
+    上一次跑出来还没提交的结果文件，不代表代码变了。
+    """
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--", ".", ":!eval/results"],
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"{commit}+dirty" if dirty else commit
+
+
 def summarize(records: list[Record], wall_s: float) -> Summary:
     s = Summary(wall_s=wall_s)
     for r in records:
@@ -278,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="eval/results")
     args = ap.parse_args(argv)
 
+    code_version = git_version()
     items = load_bird(
         args.dataset, limit=args.limit, seed=args.seed,
         questions_file=args.questions, pg_dsn=args.pg_dsn,
@@ -327,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,
             "gold_failed": s.gold_failed, "wall_s": wall,
             "completed": len(records), "aborted": aborted,
+            "git_commit": code_version, "metric_version": METRIC_VERSION,
         }, ensure_ascii=False) + "\n")
         for r in records:
             f.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
