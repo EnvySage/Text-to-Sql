@@ -39,6 +39,7 @@ from eval.dataset import Item, load_bird
 from eval.metrics import METRIC_VERSION, needs_order, result_match
 from llm.base import LLMError, Usage
 from llm.router import Router
+from retrieval.descriptions import load_descriptions
 from sandbox import open_sandbox
 
 console = Console()
@@ -86,7 +87,14 @@ class Summary:
         return self.executable / self.total if self.total else 0.0
 
 
-def run_one(item: Item, router: Router, *, sample_rows: int, max_rows: int) -> Record:
+def run_one(
+    item: Item,
+    router: Router,
+    *,
+    sample_rows: int,
+    max_rows: int,
+    column_descriptions: bool = False,
+) -> Record:
     """跑一道题：生成 SQL -> 执行 -> 和标准答案比对。
 
     任何异常都收敛成一条失败记录。一道题炸掉不能让整轮评测中断——
@@ -96,7 +104,13 @@ def run_one(item: Item, router: Router, *, sample_rows: int, max_rows: int) -> R
     sandbox = open_sandbox(item.db, max_rows=max_rows)  # type: ignore[arg-type]
 
     try:
-        schema = schema_text(item.db, sample_rows=sample_rows)  # type: ignore[arg-type]
+        descriptions = (
+            load_descriptions(item.desc_dir)
+            if column_descriptions and item.desc_dir else None
+        )
+        schema = schema_text(
+            item.db, sample_rows=sample_rows, descriptions=descriptions,  # type: ignore[arg-type]
+        )
     except Exception as exc:
         return Record(
             qid=item.qid, db_id=item.db_id, question=item.question,
@@ -292,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=2,
                     help="并发数。实测网关并发 4 会返回 503 no_healthy_account")
     ap.add_argument("--sample-rows", type=int, default=0, help="schema 里附带几行样例数据")
+    ap.add_argument("--column-descriptions", action="store_true",
+                    help="schema 里附带 BIRD 的列说明（database_description/*.csv），ROADMAP 2.1")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -305,6 +321,12 @@ def main(argv: list[str] | None = None) -> int:
         questions_file=args.questions, pg_dsn=args.pg_dsn,
     )
     dialect = "postgres" if args.pg_dsn else "sqlite"
+    if args.column_descriptions:
+        # 找不到说明就报错，不能静默退化成"无说明"——那样跑出来的数字名不副实。
+        lacking = sorted({i.db_id for i in items if i.desc_dir is None})
+        if lacking:
+            console.print(f"[bold red]这些库找不到 database_description/ 目录：{lacking}[/]")
+            return 2
     router = Router.from_file()
     provider = router.for_role("sql_gen")
     console.print(
@@ -326,7 +348,8 @@ def main(argv: list[str] | None = None) -> int:
         records, aborted = run_all(
             items,
             lambda it: run_one(
-                it, router, sample_rows=args.sample_rows, max_rows=args.max_rows
+                it, router, sample_rows=args.sample_rows, max_rows=args.max_rows,
+                column_descriptions=args.column_descriptions,
             ),
             workers=args.workers,
             stop_after=args.stop_after_call_failures,
@@ -344,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         f.write(json.dumps({
             "label": args.label, "model": provider.model, "n": len(items),
             "limit": args.limit, "seed": args.seed, "sample_rows": args.sample_rows,
+            "column_descriptions": args.column_descriptions,
             "dialect": dialect, "questions": args.questions,
             "accuracy": s.accuracy, "exec_rate": s.exec_rate,
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,

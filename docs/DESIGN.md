@@ -117,7 +117,7 @@
 
 | 文件 | 状态 | 职责 |
 |---|---|---|
-| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋 |
+| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列描述。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋 |
 | `baseline.py` | ✅ | 对照组：单次生成，不给工具、不看结果、不重试 |
 | `baseline_dialect.py` | ✅ | baseline 的方言版：system prompt 只把"SQLite"换成目标方言名；SQLite 时直接调 baseline |
 | `events.py` | 📋 | `AgentEvent` 事件类型定义 |
@@ -128,9 +128,16 @@
 **baseline.py 冻结规则**：它是所有消融实验的对照组，行为一旦改变，之前所有对比数字作废。
 除修复明确的 bug 外不得修改；修改时必须重跑 baseline 并在 EVAL.md 登记。
 
-### 3.4 `retrieval/` 📋 检索层
+### 3.4 `retrieval/` 🚧 检索层
 
-第 2 阶段实现：列描述注入（BIRD 自带 `database_description/*.csv`）、样例行、schema 裁剪、few-shot 召回。
+| 文件 | 状态 | 职责 |
+|---|---|---|
+| `descriptions.py` | ✅ | 读 BIRD 的 `database_description/<表>.csv`，得到 `{(表, 列): 说明}`，由 `agent/schema.py` 以 `-- 注释` 形式拼在每列后面 |
+
+📋 规划：样例值（2.2）、schema 裁剪（2.5）、few-shot 召回。
+
+列描述的取舍（见 D17）：列全名、列说明与列名重复时不写；取值说明去掉 `commonsense evidence:` 前缀，
+`Not useful` 丢弃；不截断。表名、列名按"小写、去首尾空白和引号、合并空白"匹配。
 
 ### 3.5 `trace/` 📋 轨迹存储
 
