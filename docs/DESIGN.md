@@ -117,7 +117,7 @@
 
 | 文件 | 状态 | 职责 |
 |---|---|---|
-| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列描述。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋 |
+| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列注释（列描述、列取值 `column_values`）。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋 |
 | `baseline.py` | ✅ | 对照组：单次生成，不给工具、不看结果、不重试 |
 | `baseline_dialect.py` | ✅ | baseline 的方言版：system prompt 只把"SQLite"换成目标方言名；SQLite 时直接调 baseline |
 | `events.py` | 📋 | `AgentEvent` 事件类型定义 |
@@ -134,7 +134,10 @@
 |---|---|---|
 | `descriptions.py` | ✅ | 读 BIRD 的 `database_description/<表>.csv`，得到 `{(表, 列): 说明}`，由 `agent/schema.py` 以 `-- 注释` 形式拼在每列后面 |
 
-📋 规划：样例值（2.2）、schema 裁剪（2.5）、few-shot 召回。
+📋 规划：schema 裁剪（2.5）、few-shot 召回。
+
+2.2 的列取值放在 `agent/schema.py` 而不是这里：它要查数据库，而能力层之间不能互相依赖
+（`retrieval/` 不能用 `sandbox/` 的只读连接）；`schema.py` 本来就负责两种方言的内省。
 
 列描述的取舍（见 D17）：列全名、列说明与列名重复时不写；取值说明去掉 `commonsense evidence:` 前缀，
 `Not useful` 丢弃；不截断。表名、列名按"小写、去首尾空白和引号、合并空白"匹配。

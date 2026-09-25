@@ -68,7 +68,7 @@ def test_pg_quoted_names_still_match():
 
 
 def test_schema_text_with_real_sqlite(sales_db):
-    text = schema_text(sales_db, descriptions={("orders", "status"): "取值：paid / refunded / pending"})
+    text = schema_text(sales_db, notes={("orders", "status"): "取值：paid / refunded / pending"})
     assert "status TEXT -- 取值：paid / refunded / pending" in text
     assert "amount REAL," in text  # 没说明的列不加注释
 
