@@ -1,0 +1,50 @@
+# 每个任务角色用哪个模型。
+#
+# 目前所有角色都跑同一个模型：一次只动一个变量。模型路由是后面的实验——
+# 在评测框架建起来之前，没有任何办法判断一次路由改动是变好还是变坏，
+# 所以先钉死一个模型，保证最早那几次消融实验是干净的。
+#
+# 某个角色对应的 provider 缺 key 时，会降级到 default 角色并发警告，
+# 这样只有一把 key 也能开发全流程。
+
+default: sql_gen
+
+roles:
+  schema_filter: { provider: local, model: cn:deepseek-v4.1-flash }
+
+  sql_gen:
+    provider: local
+    model: cn:deepseek-v4.1-flash
+    # 这是推理模型，思考过程也计入输出预算。给 2048 时实测出现过
+    # "思考烧完 2048 额度、一个字没吐" 的空回复——那是配置错误不是能力不足。
+    # 关掉思考能省钱，但那属于后面的成本优化实验，不能混进 baseline。
+    max_tokens: 8192
+    # params:
+    #   extra_body: { thinking: { type: disabled } }   # 成本实验时再开
+
+  planner:       { provider: local, model: cn:deepseek-v4.1-flash }
+  verifier:      { provider: local, model: cn:deepseek-v4.1-flash }
+  summarizer:    { provider: local, model: cn:deepseek-v4.1-flash }
+
+  # 将来要做成本/准确率对比时，加一档强模型，让 sql_gen 通过 escalate_to
+  # 指向它（主循环在连续失败 N 次后升级）：
+  #
+  #   sql_gen:
+  #     provider: local
+  #     model: cn:deepseek-v4.1-flash
+  #     escalate_after: 2
+  #     escalate_to: sql_gen_strong
+  #   sql_gen_strong: { provider: local, model: <更强的模型 id> }
+
+providers:
+  local:
+    kind: openai_compat
+    base_url: local          # 实际地址从 $LOCAL_BASE_URL 读
+    api_key_env: LOCAL_API_KEY
+  deepseek:
+    kind: openai_compat
+    base_url: deepseek
+    api_key_env: DEEPSEEK_API_KEY
+  anthropic:
+    kind: anthropic
+    api_key_env: ANTHROPIC_API_KEY

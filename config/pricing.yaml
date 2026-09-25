@@ -1,0 +1,30 @@
+# 单位：美元 / 每百万 token。
+# 在把这些数字引用到任何地方之前，先去各家官网核对——价格会变，
+# 评测表里放一个过期的数字比不放数字更糟。
+#
+# 本地网关会在 usage 里直接上报 credit 实际扣费，那种情况下这张表用不到，
+# 只有"只报 token 不报费用"的厂商才会走这里。
+#
+# cached_input：命中缓存的输入 token 单价。
+#   - DeepSeek 自动缓存，无需开启。
+#   - Anthropic 只对显式打了 cache_control 标记的块生效。
+
+deepseek-chat:
+  input: 0.27
+  cached_input: 0.07
+  output: 1.10
+
+deepseek-reasoner:
+  input: 0.55
+  cached_input: 0.14
+  output: 2.19
+
+claude-sonnet-5:
+  input: 3.00
+  cached_input: 0.30
+  output: 15.00
+
+claude-haiku-4-5-20251001:
+  input: 1.00
+  cached_input: 0.10
+  output: 5.00

@@ -1,0 +1,27 @@
+# PostgreSQL 集成测试库。账号密码只用于测试，端口只绑本机。
+#
+#   docker compose -f tests/pg/docker-compose.yml up -d --wait
+#   docker compose -f tests/pg/docker-compose.yml down
+#
+# 数据目录放在 tmpfs：每次启动都从 init.sql 重建，也不往 Docker 的磁盘镜像（在 C 盘）里写数据。
+# 显式项目名：compose 默认用目录名，tests/pg 和 eval/pg 都叫 pg，会互相替换对方的容器。
+name: agent-pg-test
+services:
+  pg:
+    image: postgres:16-alpine
+    container_name: agent-pg-test
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sales
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sales"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

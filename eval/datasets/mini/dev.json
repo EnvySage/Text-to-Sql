@@ -1,0 +1,50 @@
+[
+  {
+    "question_id": 1,
+    "db_id": "sales",
+    "question": "How many orders are there?",
+    "SQL": "SELECT COUNT(*) FROM orders",
+    "evidence": "",
+    "difficulty": "simple"
+  },
+  {
+    "question_id": 2,
+    "db_id": "sales",
+    "question": "What is the total paid amount per region?",
+    "SQL": "SELECT c.region, SUM(o.amount) FROM orders o JOIN customers c ON c.id=o.customer_id WHERE o.status='paid' GROUP BY c.region",
+    "evidence": "paid 指 status 字段为 'paid' 的订单",
+    "difficulty": "moderate"
+  },
+  {
+    "question_id": 3,
+    "db_id": "sales",
+    "question": "List the top 2 products by total paid revenue.",
+    "SQL": "SELECT p.name, SUM(o.amount) AS rev FROM orders o JOIN products p ON p.id=o.product_id WHERE o.status='paid' GROUP BY p.name ORDER BY rev DESC LIMIT 2",
+    "evidence": "",
+    "difficulty": "moderate"
+  },
+  {
+    "question_id": 4,
+    "db_id": "sales",
+    "question": "Which customer has the highest number of paid orders?",
+    "SQL": "SELECT c.name FROM orders o JOIN customers c ON c.id=o.customer_id WHERE o.status='paid' GROUP BY c.name ORDER BY COUNT(*) DESC LIMIT 1",
+    "evidence": "",
+    "difficulty": "moderate"
+  },
+  {
+    "question_id": 5,
+    "db_id": "sales",
+    "question": "What is the average order amount for Electronics products?",
+    "SQL": "SELECT AVG(o.amount) FROM orders o JOIN products p ON p.id=o.product_id WHERE p.category='Electronics'",
+    "evidence": "",
+    "difficulty": "simple"
+  },
+  {
+    "question_id": 6,
+    "db_id": "sales",
+    "question": "How many customers signed up in 2022 and have at least one refunded order?",
+    "SQL": "SELECT COUNT(DISTINCT c.id) FROM customers c JOIN orders o ON o.customer_id=c.id WHERE c.signup_year=2022 AND o.status='refunded'",
+    "evidence": "",
+    "difficulty": "challenging"
+  }
+]
