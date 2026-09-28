@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sandbox.base import Sandbox
-from sandbox.executor import SQLiteSandbox
+from sandbox.sqlite import SQLiteSandbox
 from sandbox.postgres import PostgresSandbox
 
 _PG_SCHEMES = ("postgresql://", "postgres://")

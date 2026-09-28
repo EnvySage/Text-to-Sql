@@ -84,11 +84,14 @@
 | `__init__.py` | ✅ | `open_sandbox(连接目标)`：按连接地址选实现；`dialect_of()` |
 | `base.py` | ✅ | `Sandbox` 协议、`ExecResult`；`BaseSandbox` 公共流程（guard → 补 LIMIT → 截断检测） |
 | `guard.py` | ✅ | sqlglot 按方言解析 AST，白名单只放行单条 SELECT/WITH/集合查询；拒绝 `SELECT INTO`、行锁、危险函数；补 LIMIT |
-| `executor.py` | ✅ | `SQLiteSandbox`：只读连接执行，超时中断，行数上限，失败返回而不抛异常 |
+| `sqlite.py` | ✅ | `SQLiteSandbox`：只读连接执行，超时中断，行数上限，失败返回而不抛异常 |
 | `postgres.py` | ✅ | `PostgresSandbox`：账号自检、只读事务、服务端游标、服务端超时 |
 | `mysql.py` | 📋 | `MySQLSandbox`，需要引入 pymysql（待用户同意） |
 
 两道防线相互独立：AST 白名单挡语义，连接权限挡驱动层写入。任何一道都不能因为"另一道已经挡了"而被删掉。
+
+> 读 `sandbox/` 时发现的、尚未定性的可疑点，记在 [`SANDBOX-NOTES.md`](SANDBOX-NOTES.md)，
+> 经用户评估后再决定是否修复。本文件只写已定型的结论。
 
 **多数据库**：一个 `Sandbox` 接口，每种库一个实现，按连接地址选。上层（agent、eval）只认接口。
 每种库的两道防线：
@@ -117,7 +120,7 @@
 
 | 文件 | 状态 | 职责 |
 |---|---|---|
-| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列注释（列描述、列取值 `column_values`）。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋 |
+| `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列注释（列描述、列取值 `column_values`）。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋。**方言分派走 `_LOADERS` 注册表**：加一种库 = 写一个 loader + 登记一行，`load_schema` 不改；没登记的方言明确报"尚未支持"，不回退成别的实现 |
 | `baseline.py` | ✅ | 对照组：单次生成，不给工具、不看结果、不重试 |
 | `baseline_dialect.py` | ✅ | baseline 的方言版：system prompt 只把"SQLite"换成目标方言名；SQLite 时直接调 baseline |
 | `events.py` | 📋 | `AgentEvent` 事件类型定义 |

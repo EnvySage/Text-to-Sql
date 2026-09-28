@@ -157,3 +157,4 @@ Web 界面投入控制在两天内。
 | 8 | `smoke.py` 放在项目根目录 | 可移到 `scripts/`，非必须 | 无 |
 | 9 | MySQL 实现要引入 `pymysql`（`psycopg` 已于 09-25 经用户同意引入） | 需要时再做 | 阻塞 M.3 |
 | 10 | `README.md` 过时（写的是 44 个测试、没有 PG 和阶段 2 的数字），已公开在 GitHub | 阶段 4 重写 | 对外展示 |
+| 11 | ~~`sandbox/` 有 2 条未定性的疑点（`guard.py` 的 `exp.With` 死分支、MySQL `INTO OUTFILE` 靠解析失败兜底）~~ | ✅ 09-28 S1 已修复（见 [`SANDBOX-NOTES.md`](SANDBOX-NOTES.md)）；S3 待 MySQL 执行器实现时一并处理 | — |
