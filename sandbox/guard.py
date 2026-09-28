@@ -93,14 +93,14 @@ def check(sql: str, dialect: str = "sqlite") -> GuardResult:
 
     root = statements[0]
 
-    # WITH ... SELECT 的顶层节点是被查询包裹的，取出真正的主体判断。
-    body = root
-    if isinstance(root, exp.With):
-        body = root.this
-
-    if not isinstance(body, _ALLOWED_ROOT):
+    # WITH x AS (...) SELECT ... 的根节点就是主查询（Select/Union），With 只是
+    # 挂在它 args["with_"] 里的子节点——不存在"外层包一层 With"的树形，
+    # 不需要拆壳。tree-shape 由 tests/test_guard_dialects.py::test_cte_tree_shape_is_pinned
+    # 钉住，上游 sqlglot 若改了结构，测试先红。CTE 内部的写操作由下面的
+    # walk() 全树扫描兜住。
+    if not isinstance(root, _ALLOWED_ROOT):
         return GuardResult(
-            False, f"只允许 SELECT 查询，检测到 {type(body).__name__.upper()}"
+            False, f"只允许 SELECT 查询，检测到 {type(root).__name__.upper()}"
         )
 
     for node in root.walk():
@@ -130,7 +130,9 @@ def ensure_limit(sql: str, limit: int, dialect: str = "sqlite") -> str:
     if tree is None:
         return sql
 
-    body = tree.this if isinstance(tree, exp.With) else tree
-    if isinstance(body, _ALLOWED_ROOT) and not body.args.get("limit"):
+    # 顶层节点就是主查询，limit 槽位直接在它身上（同 check() 处的树形注释）。
+    # 曾经在这里写过 isinstance(tree, exp.With) 的拆壳分支，树形假设错了，
+    # 恒不成立，2026-09-28 删除——详见 docs/SANDBOX-NOTES.md S1。
+    if isinstance(tree, _ALLOWED_ROOT) and not tree.args.get("limit"):
         return tree.limit(limit).sql(dialect=dialect)
     return sql

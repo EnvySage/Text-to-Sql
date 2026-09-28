@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sandbox.executor import SQLiteSandbox
+from sandbox.sqlite import SQLiteSandbox
 from sandbox.guard import check
 
 

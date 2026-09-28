@@ -6,10 +6,13 @@
 
 from __future__ import annotations
 
+import sqlglot
+from sqlglot import exp
+
 import pytest
 
 from sandbox.base import Sandbox
-from sandbox.executor import SQLiteSandbox
+from sandbox.sqlite import SQLiteSandbox
 from sandbox.guard import check, ensure_limit
 
 MUST_BLOCK = [
@@ -116,3 +119,30 @@ def test_sqlite_sandbox_satisfies_protocol(sales_db):
     sb = SQLiteSandbox(sales_db)
     assert isinstance(sb, Sandbox)
     assert sb.dialect == "sqlite"
+
+
+def test_cte_tree_shape_is_pinned():
+    """钉住树形假设：WITH 查询的根节点是主查询（Select/Union），With 只是
+    args["with_"] 子节点。guard.py 曾按"根节点是 With、需拆壳"写过分支，
+    恒不成立（详见 docs/SANDBOX-NOTES.md S1）；上游 sqlglot 若改了树形，
+    这个测试先红，check/ensure_limit 的白名单判断才不会静默失效。"""
+    root = sqlglot.parse_one(
+        "WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM a UNION SELECT * FROM b",
+        dialect="postgres",
+    )
+    assert isinstance(root, (exp.Select, exp.Union))
+    # CTE 定义仍然在树里，别把"根不是 With"误解成"With 丢了"
+    assert root.find(exp.With) is not None
+
+
+@pytest.mark.parametrize("dialect,sql", [
+    ("sqlite", "WITH x AS (SELECT 1 AS c) SELECT c FROM x"),
+    ("postgres", "WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM a, b"),
+    # 根节点是 Union、CTE 挂在左支上——白名单判断和补 LIMIT 都要穿透它
+    ("postgres", "WITH x AS (SELECT * FROM t) SELECT * FROM x UNION ALL SELECT * FROM u"),
+])
+def test_cte_queries_pass_guard(dialect, sql):
+    r = check(sql, dialect=dialect)
+    assert r.ok, f"[{dialect}] CTE 查询被误拒：{sql}（{r.reason}）"
+    out = ensure_limit(sql, 10, dialect=dialect)
+    assert "LIMIT 10" in out, f"[{dialect}] ensure_limit 没有给 CTE 查询补 LIMIT"

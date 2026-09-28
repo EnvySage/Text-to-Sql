@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from sandbox import dialect_of, open_sandbox
-from sandbox.executor import SQLiteSandbox
+from sandbox.sqlite import SQLiteSandbox
 from sandbox.postgres import PostgresSandbox
 
 

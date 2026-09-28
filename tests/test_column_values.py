@@ -7,7 +7,8 @@ import sqlite3
 import pytest
 
 from agent.schema import (
-    ENUM_MAX, VALUE_MAX_CHARS, column_values, describe_values, merge_notes, schema_text,
+    ENUM_MAX, VALUE_MAX_CHARS, column_values, describe_values, load_schema,
+    merge_notes, schema_text,
 )
 
 
@@ -60,3 +61,17 @@ def test_real_db_values_are_rendered(sales_db):
 
 def test_merge_notes_skips_missing():
     assert merge_notes(None, {("t", "a"): "x"}, {("t", "a"): ""}) == {("t", "a"): "x"}
+
+
+def test_unsupported_dialect_raises_instead_of_falling_back():
+    """没登记的方言必须**明确报错**，不能回退成 SQLite。
+
+    曾经这里是个 `else` 兜底分支：MySQL 连接地址会被当文件路径去打开，报
+    "unable to open database file"——排查方向被带偏到"文件路径写错了"。
+    注册表分派 + 显式 raise 把这条堵死。见 docs/DESIGN.md 3.3。
+    """
+    target = "mysql://u:p@127.0.0.1:3306/bird"
+    with pytest.raises(NotImplementedError, match="mysql"):
+        load_schema(target)
+    with pytest.raises(NotImplementedError, match="mysql"):
+        column_values(target)
