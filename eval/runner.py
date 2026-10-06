@@ -33,7 +33,6 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from agent import prompt_columns
 from agent.baseline_dialect import generate_sql
 from agent.schema import column_values, merge_notes, schema_text
 from eval.dataset import Item, load_bird
@@ -96,7 +95,6 @@ def run_one(
     max_rows: int,
     column_descriptions: bool = False,
     with_column_values: bool = False,
-    output_columns: bool = False,
 ) -> Record:
     """跑一道题：生成 SQL -> 执行 -> 和标准答案比对。
 
@@ -124,8 +122,7 @@ def run_one(
         )
 
     try:
-        gen_fn = prompt_columns.generate_sql if output_columns else generate_sql
-        gen = gen_fn(
+        gen = generate_sql(
             router.for_role("sql_gen"),
             dialect=sandbox.dialect,
             schema=schema, question=item.question, evidence=item.evidence,
@@ -315,8 +312,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="schema 里附带 BIRD 的列说明（database_description/*.csv），ROADMAP 2.1")
     ap.add_argument("--column-values", action="store_true",
                     help="schema 里附带每列的真实取值（≤10 种全列，否则 3 个样例），ROADMAP 2.2")
-    ap.add_argument("--output-columns", action="store_true",
-                    help="prompt 加一条硬规则：只返回问题问到的列，ROADMAP 2.3")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -360,7 +355,6 @@ def main(argv: list[str] | None = None) -> int:
                 it, router, sample_rows=args.sample_rows, max_rows=args.max_rows,
                 column_descriptions=args.column_descriptions,
                 with_column_values=args.column_values,
-                output_columns=args.output_columns,
             ),
             workers=args.workers,
             stop_after=args.stop_after_call_failures,
@@ -380,7 +374,6 @@ def main(argv: list[str] | None = None) -> int:
             "limit": args.limit, "seed": args.seed, "sample_rows": args.sample_rows,
             "column_descriptions": args.column_descriptions,
             "column_values": args.column_values,
-            "output_columns": args.output_columns,
             "dialect": dialect, "questions": args.questions,
             "accuracy": s.accuracy, "exec_rate": s.exec_rate,
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,
