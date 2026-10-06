@@ -123,9 +123,9 @@
 | `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列注释（列描述、列取值 `column_values`）。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋。**方言分派走 `_LOADERS` 注册表**：加一种库 = 写一个 loader + 登记一行，`load_schema` 不改；没登记的方言明确报"尚未支持"，不回退成别的实现 |
 | `baseline.py` | ✅ | 对照组：单次生成，不给工具、不看结果、不重试 |
 | `baseline_dialect.py` | ✅ | baseline 的方言版：system prompt 只把"SQLite"换成目标方言名；SQLite 时直接调 baseline |
-| `events.py` | 📋 | `AgentEvent` 事件类型定义 |
-| `core.py` | 📋 | 主循环，产出事件流 |
-| `tools.py` | 📋 | 暴露给模型的工具（执行 SQL、查看表结构等） |
+| `events.py` | ✅ | `AgentEvent` 事件类型定义（`type` / `payload` / `usage` / `ts`），类型表是 4.4 的子集 |
+| `core.py` | ✅ | 工具循环，产出事件流；`consume()` 收敛成结果。`MAX_STEPS_DEFAULT = 10` 兜底，不开连接 |
+| `tools.py` | ✅ | `execute_sql` / `submit_sql` 两个 `ToolSpec`，加 `TOOLS` 列表 |
 | `cli.py` | 📋 | 命令行渲染 |
 
 **baseline.py 冻结规则**：它是所有消融实验的对照组，行为一旦改变，之前所有对比数字作废。
@@ -201,19 +201,27 @@ PostgresSandbox(dsn, timeout=30.0, max_rows=2000).run(sql) -> ExecResult
 新代码（`agent/tools.py` 等）依赖 `Sandbox` 协议，不依赖具体实现；`eval/runner.py` 目前直接用
 `SQLiteSandbox`，因为 BIRD 只有 SQLite 版本。
 
-### 4.4 事件流（📋 规划，实现时以此为准）
+### 4.4 事件流 ✅
 
 ```python
 @dataclass
 class AgentEvent:
     type: Literal["plan", "step_start", "tool_call", "tool_result",
                   "retry", "verify", "final", "error"]
-    payload: dict
+    payload: dict[str, Any] = field(default_factory=dict)
     usage: Usage | None = None
     ts: float = field(default_factory=time.time)
 
-def run(question: str, db_path: Path) -> Iterator[AgentEvent]: ...
+def run(question: str, *, provider: LLMProvider, sandbox: Sandbox, schema: str,
+        evidence: str = "", max_steps: int = 10, max_tokens: int = 8192
+        ) -> Iterator[AgentEvent]: ...
+
+def consume(events: Iterator[AgentEvent]) -> AgentOutcome: ...
 ```
+
+**schema 加载与沙箱选择由调用方负责，循环不开连接**——所以 `run` 收的是现成的
+`schema` 文本和 `Sandbox` 实例，不是 `db_path`。`AgentOutcome` 是收敛后的结果
+（`sql` / `steps` / `tool_calls` / `hit_cap` / `usage` / `error`），供 runner 落盘。
 
 主循环只产出事件，不做任何渲染。CLI、Web、轨迹存储、评测 runner 都是事件流的消费者。
 这样一套引擎可以同时被人看、被存、被回放、被评测。

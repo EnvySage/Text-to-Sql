@@ -1,7 +1,8 @@
 """暴露给模型的工具：试跑 SQL、交卷。
 
 只给两个。schema 整份已经在 prompt 里，取数用 `SELECT ... LIMIT` 自己就能办到——
-工具由错误数据逼出来，不拍脑袋加。见设计文档第 7 节。
+工具由错误数据逼出来，不拍脑袋加。为什么只给两个见
+`docs/superpowers/specs/2026-10-06-agent-loop-design.md` 第 7 节。
 """
 
 from __future__ import annotations
