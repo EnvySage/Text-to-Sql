@@ -8,7 +8,9 @@
 name: agent-pg-test
 services:
   pg:
-    image: postgres:16-alpine
+    # Docker Hub 在国内直连不通，这里用本机已有的 PostgreSQL 16 镜像。
+    # 换回 postgres:16-alpine 也可以，行为一致。
+    image: ${PG_IMAGE:-pgvector/pgvector:pg16}
     container_name: agent-pg-test
     environment:
       POSTGRES_USER: postgres
