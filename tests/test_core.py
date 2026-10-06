@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent import core
 from agent.events import AgentEvent
-from llm.base import LLMResponse, ToolCall, Usage
+from llm.base import LLMError, LLMResponse, ToolCall, Usage
 from sandbox.base import ExecResult
 
 
@@ -84,3 +84,73 @@ def test_tool_result_carries_real_rows():
     results = [m for m in second if m.tool_results]
     assert results and results[0].tool_results[0].content.startswith("a\n1")
     assert results[0].tool_results[0].is_error is False
+
+
+def test_max_steps_marks_hit_cap():
+    """模型一直试跑不收工：撞上限，hit_cap=True，不抛异常。"""
+    script = [_resp(calls=[ToolCall(f"c{i}", "execute_sql", {"sql": "SELECT a FROM t"})])
+              for i in range(3)]
+    _, events, out = _run(script, max_steps=3)
+    assert out.hit_cap is True
+    assert out.steps == 3
+    assert out.tool_calls == 3
+    assert events[-1].type == "final"
+
+
+def test_text_only_falls_back_to_extract():
+    """模型没调工具、只回文字：兜底从文字里抠 SQL。"""
+    _, _, out = _run([_resp(text="```sql\nSELECT a FROM t\n```")])
+    assert out.sql == "SELECT a FROM t"
+    assert out.tool_calls == 0 and out.hit_cap is False
+
+
+def test_failed_execution_feeds_error_back():
+    """试跑报错：错误原文回灌，is_error=True。"""
+    sandbox = FakeSandbox({"SELECT bad": ExecResult(ok=False, error="no such column: bad")})
+    script = [
+        _resp(calls=[ToolCall("c1", "execute_sql", {"sql": "SELECT bad"})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT a FROM t"})]),
+    ]
+    p, _, out = _run(script, sandbox)
+    results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert results[0].tool_results[0].is_error is True
+    assert "no such column: bad" in results[0].tool_results[0].content
+    assert out.sql == "SELECT a FROM t"
+
+
+def test_usage_is_summed_across_calls():
+    """两次调用的 token 要相加，否则成本算错。"""
+    script = [
+        _resp(calls=[ToolCall("c1", "execute_sql", {"sql": "SELECT a FROM t"})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
+    ]
+    _, _, out = _run(script)
+    assert out.usage.input_tokens == 20
+    assert out.usage.output_tokens == 10
+
+
+def test_llm_error_converges_to_error_event():
+    """provider 抛 LLMError：收敛成 error 事件，不冒泡。"""
+    class BoomProvider:
+        name = model = "boom"
+
+        def chat(self, **kwargs):
+            raise LLMError("网关 503", provider="fake", retryable=True)
+
+    events = list(core.run("问题", provider=BoomProvider(), sandbox=FakeSandbox(),
+                           schema=""))
+    assert events[-1].type == "error"
+    out = core.consume(iter(events))
+    assert "503" in out.error
+
+
+def test_unknown_tool_is_reported_not_crashed():
+    """模型喊了不存在的工具：回一条错误结果，循环继续。"""
+    script = [
+        _resp(calls=[ToolCall("c1", "no_such_tool", {})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
+    ]
+    p, _, out = _run(script)
+    results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert results[0].tool_results[0].is_error is True
+    assert out.sql == "SELECT 1"
