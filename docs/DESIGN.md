@@ -123,8 +123,8 @@
 | `schema.py` | ✅ | 抽取表结构渲染成 DDL 文本，可选附列注释（列描述、列取值 `column_values`）。SQLite 用 `PRAGMA`；PG 用 `pg_catalog`，表名列名由 `quote_ident` 按需加引号；MySQL 📋。**方言分派走 `_LOADERS` 注册表**：加一种库 = 写一个 loader + 登记一行，`load_schema` 不改；没登记的方言明确报"尚未支持"，不回退成别的实现 |
 | `baseline.py` | ✅ | 对照组：单次生成，不给工具、不看结果、不重试 |
 | `baseline_dialect.py` | ✅ | baseline 的方言版：system prompt 只把"SQLite"换成目标方言名；SQLite 时直接调 baseline |
-| `events.py` | ✅ | `AgentEvent` 事件类型定义（`type` / `payload` / `usage` / `ts`），类型表是 4.4 的子集 |
-| `core.py` | ✅ | 工具循环，产出事件流；`consume()` 收敛成结果。`MAX_STEPS_DEFAULT = 10` 兜底，不开连接 |
+| `events.py` | ✅ | `AgentEvent` 事件类型定义（`type` / `payload` / `usage` / `ts`），类型表与 4.4 全集相同（`plan` / `verify` / `retry` 声明出来，阶段 3 才产出） |
+| `core.py` | ✅ | 工具循环，产出事件流；`consume()` 收敛成结果。`MAX_STEPS_DEFAULT = 10` 兜底，不开连接。system prompt 按方言拼：`system_prompt(dialect) = baseline_dialect.system_prompt(dialect) + TOOL_SUFFIX`，`dialect` 是 `run()` 的必填关键字参数（PG 上告诉模型"你是 SQLite 专家"不会报错，只会静默写错 SQL）；SQLite 时结果与 `baseline.SYSTEM + TOOL_SUFFIX` 逐字节相同 |
 | `tools.py` | ✅ | `execute_sql` / `submit_sql` 两个 `ToolSpec`，加 `TOOLS` 列表 |
 | `cli.py` | 📋 | 命令行渲染 |
 
@@ -213,15 +213,22 @@ class AgentEvent:
     ts: float = field(default_factory=time.time)
 
 def run(question: str, *, provider: LLMProvider, sandbox: Sandbox, schema: str,
-        evidence: str = "", max_steps: int = 10, max_tokens: int = 8192
+        dialect: str, evidence: str = "", max_steps: int = 10, max_tokens: int = 8192
         ) -> Iterator[AgentEvent]: ...
 
 def consume(events: Iterator[AgentEvent]) -> AgentOutcome: ...
 ```
 
 **schema 加载与沙箱选择由调用方负责，循环不开连接**——所以 `run` 收的是现成的
-`schema` 文本和 `Sandbox` 实例，不是 `db_path`。`AgentOutcome` 是收敛后的结果
+`schema` 文本和 `Sandbox` 实例，不是 `db_path`。`dialect` 同样由调用方传（取
+`sandbox.dialect`），`run` 自己不猜：方言只影响 prompt 里的那一个词，猜错了不会抛异常，
+只会静默产出错误方言的 SQL。`system_prompt(dialect)` 在 SQLite 上
+`== baseline.SYSTEM + TOOL_SUFFIX`，已有数字的可比性不受影响。
+
+`AgentOutcome` 是收敛后的结果
 （`sql` / `steps` / `tool_calls` / `hit_cap` / `usage` / `error`），供 runner 落盘。
+`error` 事件也带 `steps` / `tool_calls`：循环中途崩掉时，消费方要能看出已经走了几步、
+调过几次工具，否则这两个字段在失败路径上结构性恒为 0。
 
 主循环只产出事件，不做任何渲染。CLI、Web、轨迹存储、评测 runner 都是事件流的消费者。
 这样一套引擎可以同时被人看、被存、被回放、被评测。

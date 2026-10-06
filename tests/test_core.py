@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from agent import core
-from agent.events import AgentEvent
 from llm.base import LLMError, LLMResponse, ToolCall, Usage
 from sandbox.base import ExecResult
 
@@ -43,7 +42,7 @@ def _resp(text=None, calls=None):
 def _run(script, sandbox=None, **kw):
     p = FakeProvider(script)
     events = list(core.run("问题", provider=p, sandbox=sandbox or FakeSandbox(),
-                           schema="CREATE TABLE t (a INT);", **kw))
+                           schema="CREATE TABLE t (a INT);", dialect="sqlite", **kw))
     return p, events, core.consume(iter(events))
 
 
@@ -82,7 +81,8 @@ def test_tool_result_carries_real_rows():
     # 第二次调用的 messages 里必须有一条携带工具结果的 user 消息
     second = p.calls[1]["messages"]
     results = [m for m in second if m.tool_results]
-    assert results and results[0].tool_results[0].content.startswith("a\n1")
+    assert results, "tool_results 没回灌进 messages"
+    assert results[0].tool_results[0].content.startswith("a\n1")
     assert results[0].tool_results[0].is_error is False
 
 
@@ -113,6 +113,7 @@ def test_failed_execution_feeds_error_back():
     ]
     p, _, out = _run(script, sandbox)
     results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert results, "tool_results 没回灌进 messages"
     assert results[0].tool_results[0].is_error is True
     assert "no such column: bad" in results[0].tool_results[0].content
     assert out.sql == "SELECT a FROM t"
@@ -129,6 +130,15 @@ def test_usage_is_summed_across_calls():
     assert out.usage.output_tokens == 10
 
 
+def test_system_prompt_follows_dialect():
+    """PG 上跑却把模型当 SQLite 专家，不会报错只会静默写错 SQL——prompt 必须跟方言走。"""
+    p = FakeProvider([_resp(calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})])])
+    list(core.run("问题", provider=p, sandbox=FakeSandbox(), schema="",
+                  dialect="postgres"))
+    assert "PostgreSQL" in p.calls[0]["system"]
+    assert "SQLite" not in p.calls[0]["system"]
+
+
 def test_llm_error_converges_to_error_event():
     """provider 抛 LLMError：收敛成 error 事件，不冒泡。"""
     class BoomProvider:
@@ -138,10 +148,12 @@ def test_llm_error_converges_to_error_event():
             raise LLMError("网关 503", provider="fake", retryable=True)
 
     events = list(core.run("问题", provider=BoomProvider(), sandbox=FakeSandbox(),
-                           schema=""))
+                           schema="", dialect="sqlite"))
     assert events[-1].type == "error"
     out = core.consume(iter(events))
     assert "503" in out.error
+    # error 事件要带上跑到第几步、调过几次工具，否则消费方读到的永远是 0
+    assert out.steps == 1 and out.tool_calls == 0
 
 
 def test_unknown_tool_is_reported_not_crashed():
@@ -150,7 +162,13 @@ def test_unknown_tool_is_reported_not_crashed():
         _resp(calls=[ToolCall("c1", "no_such_tool", {})]),
         _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
     ]
-    p, _, out = _run(script)
+    p, events, out = _run(script)
     results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert results, "tool_results 没回灌进 messages"
     assert results[0].tool_results[0].is_error is True
+    assert "未知工具" in results[0].tool_results[0].content
     assert out.sql == "SELECT 1"
+    # 未知工具也是一次工具调用，轨迹里要留下 tool_call / tool_result 一对
+    assert [e.type for e in events] == [
+        "step_start", "tool_call", "tool_result", "step_start", "final",
+    ]

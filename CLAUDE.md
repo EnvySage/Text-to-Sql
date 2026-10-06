@@ -42,7 +42,7 @@
 
 ```bash
 uv sync --group dev
-uv run --group dev pytest tests/ -q        # 158 个测试；PG 测试库没起时跳过其中 24 个
+uv run --group dev pytest tests/ -q        # 159 个测试；PG 测试库没起时跳过其中 24 个
 docker compose -f tests/pg/docker-compose.yml up -d --wait   # PG 集成测试库（tmpfs，不落盘）
 docker compose -f tests/pg/docker-compose.yml down
 uv run python smoke.py                     # 端到端验证网关（极少量花费）

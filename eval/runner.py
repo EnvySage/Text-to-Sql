@@ -132,7 +132,8 @@ def run_one(
     if use_tools:
         outcome = core.consume(core.run(
             item.question, provider=provider, sandbox=sandbox,
-            schema=schema, evidence=item.evidence, max_tokens=max_tokens,
+            schema=schema, dialect=sandbox.dialect, evidence=item.evidence,
+            max_tokens=max_tokens,
         ))
         if outcome.error:
             return Record(
@@ -142,6 +143,12 @@ def run_one(
                 elapsed_ms=(time.perf_counter() - started) * 1000,
                 schema_chars=len(schema), error=outcome.error,
                 steps=outcome.steps, tool_calls=outcome.tool_calls, hit_cap=outcome.hit_cap,
+                # 循环在第 7 步炸掉也要把前面 6 次调用的账记上，否则钱花在哪看不出来。
+                input_tokens=outcome.usage.input_tokens,
+                output_tokens=outcome.usage.output_tokens,
+                cached_tokens=outcome.usage.cached_input_tokens,
+                reasoning_tokens=outcome.usage.reasoning_tokens,
+                cost=outcome.usage.cost, cost_unit=outcome.usage.cost_unit,
             )
         sql, u = outcome.sql, outcome.usage
         err = ""

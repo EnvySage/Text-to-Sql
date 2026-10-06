@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from agent.events import AgentEvent
 from llm.base import Usage
 
@@ -22,4 +24,8 @@ def test_carries_payload_and_usage():
 
 
 def test_ts_is_independent_per_event():
-    assert AgentEvent("step_start").ts <= AgentEvent("step_start").ts
+    """每个事件各自取一次时间戳：同一时刻创建的两个事件不能共享 ts。"""
+    e1 = AgentEvent("step_start")
+    time.sleep(0.01)
+    e2 = AgentEvent("step_start")
+    assert e1.ts < e2.ts

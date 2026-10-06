@@ -68,13 +68,13 @@ ToolSpec(
 ### 3.3 循环
 
 ```python
-def run(question, *, provider, sandbox, schema, evidence="",
+def run(question, *, provider, sandbox, schema, dialect, evidence="",
         max_steps=10, max_tokens=8192) -> Iterator[AgentEvent]:
     messages = [Message.user(USER_TEMPLATE.format(...))]   # schema + evidence + 问题 + 工具说明
     usage_total = Usage()
     for step in range(1, max_steps + 1):
         yield AgentEvent("step_start", {"step": step})
-        resp = provider.chat(system=SYSTEM, messages=messages,
+        resp = provider.chat(system=system_prompt(dialect), messages=messages,
                              tools=TOOLS, max_tokens=max_tokens)
         usage_total = usage_total + resp.usage
         if not resp.tool_calls:
@@ -98,7 +98,7 @@ def run(question, *, provider, sandbox, schema, evidence="",
 `hit_cap=True` 记下来——这是异常信号，不是"用满了额度"。
 
 **与 DESIGN 4.4 的差异**：4.4 的草案签名是 `run(question, db_path) -> Iterator[AgentEvent]`。
-实际签名多带 `provider` / `sandbox` / `schema`——因为 schema 的加载和沙箱的选择由调用方
+实际签名多带 `provider` / `sandbox` / `schema` / `dialect`——因为 schema 的加载和沙箱的选择由调用方
 （runner）负责，循环不该自己去开连接。实现后同步更新 DESIGN 4.4。
 
 ### 3.4 关键约束
@@ -110,8 +110,12 @@ def run(question, *, provider, sandbox, schema, evidence="",
 3. **usage 聚合**：一次提问可能 N 次调用，用 `Usage.__add__` 相加（它已做计价单位校验）。
 4. **失败收敛**：模型调用异常（`LLMError`）收敛成 `error` 事件，**不抛到评测主循环**
    （项目硬规矩：单题炸掉不能中断整轮）。
-5. **prompt**：baseline 的 SYSTEM + 一句「先给出你的 SQL；如果不确定，可以调用 execute_sql
-   验证后再用 submit_sql 交卷」。
+5. **prompt 要跟方言走**：`core.system_prompt(dialect)` =
+   `baseline_dialect.system_prompt(dialect) + TOOL_SUFFIX`。不能直接用 `baseline.SYSTEM`——
+   它写死"你是一个 SQLite 专家"，在 PG 上跑会告诉模型错误的方言，**不报错只会静默写错 SQL**。
+   `baseline_dialect.system_prompt("sqlite") == baseline.SYSTEM`，所以 SQLite 上的 prompt
+   和常量版逐字节相同，已有数字的可比性不受影响。`TOOL_SUFFIX` 是常量：工具说明对各方言
+   必须一致，否则跨方言对比会多出一个变量。
 
 ### 3.5 事件类型（2.4 用到的子集）
 
@@ -123,9 +127,13 @@ def run(question, *, provider, sandbox, schema, evidence="",
 | `tool_call` | `{name, args}` |
 | `tool_result` | `{name, ok, rows, error}` |
 | `final` | `{sql, steps, tool_calls, hit_cap, usage}` |
-| `error` | `{message}` |
+| `error` | `{message, steps, tool_calls}` |
 
-`plan` / `verify` / `retry` 留给阶段 3。DESIGN 4.4 的类型表是全集，这里先实现子集。
+`plan` / `verify` / `retry` 留给阶段 3。DESIGN 4.4 的类型表是全集，这里先实现子集
+（`EventType` 声明 8 种，2.4 实际产出 5 种）。
+
+`error` 也带 `steps` / `tool_calls`：循环跑到第 7 步崩掉时，消费方要能看出前面已经走了几步、
+调过几次工具。否则这两个字段在 error 路径上结构性恒为 0，读它的人会被误导。
 
 ### 3.6 runner 接线
 
@@ -133,11 +141,15 @@ def run(question, *, provider, sandbox, schema, evidence="",
 
 ```python
 if use_tools:
-    outcome = consume(core.run(question, provider=..., sandbox=sandbox, schema=schema, ...))
+    outcome = consume(core.run(question, provider=..., sandbox=sandbox, schema=schema,
+                               dialect=sandbox.dialect, ...))
     gen_sql, usage = outcome.sql, outcome.usage
 else:
     gen = generate_sql(...)     # 现有单次路径，一字不动
 ```
+
+`dialect` 从 `sandbox.dialect` 取，不另设开关：同一个沙箱跑的 SQL 和 prompt 里的方言名
+必须同源，分成两处配置迟早会对不上。
 
 **默认关 → 老路不变，已有数字不受影响。** 这是硬要求。
 

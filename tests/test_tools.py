@@ -11,6 +11,7 @@ def test_exactly_two_tools():
 
 def test_both_require_sql_arg():
     for t in (EXECUTE_SQL, SUBMIT_SQL):
+        assert t.parameters["type"] == "object"   # 厂商侧要求 JSON Schema 顶层是 object
         assert t.parameters["required"] == ["sql"]
         assert "sql" in t.parameters["properties"]
 

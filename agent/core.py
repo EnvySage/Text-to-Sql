@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from agent import baseline
+from agent import baseline, baseline_dialect
 from agent.events import AgentEvent
 from agent.tools import TOOLS
 from llm.base import LLMError, LLMProvider, Message, ToolResult, Usage
@@ -19,12 +19,23 @@ from sandbox.base import Sandbox
 # 防跑飞的兜底，不是预算：正常模型 1-3 步交卷，撞到它说明模型绕不出来。
 MAX_STEPS_DEFAULT = 10
 
-SYSTEM = baseline.SYSTEM + """
+# 工具说明。拼在方言版 baseline prompt 后面，不是替掉它——
+# 跨方言对比要求只变方言这一个变量，工具说明对各方言必须逐字相同。
+TOOL_SUFFIX = """
 
 你可以调用以下工具：
 - execute_sql：试跑一条查询，看真实结果，用来验证你的 SQL 是否正确。
 - submit_sql：确定之后，用它提交最终答案。
 不确定时先 execute_sql 验证，确认无误再用 submit_sql 交卷。"""
+
+
+def system_prompt(dialect: str) -> str:
+    """方言版 baseline prompt + 工具说明。
+
+    ``baseline_dialect.system_prompt("sqlite") == baseline.SYSTEM``，所以 SQLite 上
+    的 prompt 和加工具之前的常量逐字节相同，已有数字不受影响。
+    """
+    return baseline_dialect.system_prompt(dialect) + TOOL_SUFFIX
 
 
 @dataclass(slots=True)
@@ -45,11 +56,16 @@ def run(
     provider: LLMProvider,
     sandbox: Sandbox,
     schema: str,
+    dialect: str,
     evidence: str = "",
     max_steps: int = MAX_STEPS_DEFAULT,
     max_tokens: int = 8192,
 ) -> Iterator[AgentEvent]:
-    """跑一轮工具循环，产出事件流。最后必是一个 ``final`` 或 ``error``。"""
+    """跑一轮工具循环，产出事件流。最后必是一个 ``final`` 或 ``error``。
+
+    ``dialect`` 决定 system prompt 里的方言名：PG 上跑却告诉模型"你是 SQLite 专家"
+    不会报错，只会静默写错 SQL，所以这个参数不能由默认值兜住。
+    """
     ev = f"\n业务口径说明：{evidence}\n" if evidence else ""
     messages = [Message.user(baseline.USER_TEMPLATE.format(
         schema=schema, evidence=ev, question=question))]
@@ -60,13 +76,21 @@ def run(
         yield AgentEvent("step_start", {"step": step})
         try:
             resp = provider.chat(
-                system=SYSTEM, messages=messages, tools=TOOLS, max_tokens=max_tokens,
+                system=system_prompt(dialect), messages=messages, tools=TOOLS,
+                max_tokens=max_tokens,
             )
+            # Usage.__add__ 遇到混合 cost_unit 会抛 ValueError。放在 try 里收敛成
+            # error 事件，否则异常会冒出生成器、炸到评测主循环。
+            usage = usage + resp.usage
         except LLMError as exc:
-            yield AgentEvent("error", {"message": str(exc)},
+            yield AgentEvent("error", {"message": str(exc), "steps": step,
+                                       "tool_calls": n_calls}, usage=usage)
+            return
+        except ValueError as exc:
+            yield AgentEvent("error", {"message": f"用量聚合失败：{exc}",
+                                       "steps": step, "tool_calls": n_calls},
                              usage=usage)
             return
-        usage = usage + resp.usage
 
         if not resp.tool_calls:
             # 模型没调工具就停了：走兜底，从文字里抠（和单次路径同源）。
@@ -87,8 +111,15 @@ def run(
                 }, usage=usage)
                 return
             if tc.name != "execute_sql":
+                # 未知工具也发一对事件：轨迹里要能看出模型喊了什么、被回了什么，
+                # 否则消费方看到 tool_calls 计数涨了却少一段经过。
+                yield AgentEvent("tool_call", {"name": tc.name, "args": tc.args})
                 results.append(ToolResult(
                     call_id=tc.id, content=f"未知工具：{tc.name}", is_error=True))
+                yield AgentEvent("tool_result", {
+                    "name": tc.name, "ok": False, "rows": 0,
+                    "error": f"未知工具：{tc.name}",
+                })
                 continue
             # 先产出 tool_call 再执行：消费者要在结果之前看到这次调用。
             yield AgentEvent("tool_call", {"name": tc.name, "args": tc.args})
