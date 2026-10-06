@@ -16,7 +16,13 @@ from agent.baseline import GenResult
 from llm.base import LLMProvider, Message
 
 # 实验的唯一变量：这条规则的有无。改措辞就是另一个实验，改完要重跑对照。
-EXTRA_RULE = "- 只输出问题问到的列，不多也不少。"
+#
+# 措辞对准 outcols 里 12 道列数错的常见模式（9/12）：
+#   多带辅助列（问"哪些 bond 的 atom id"却多返回 atom_id2、问"哪场比赛"却多带 race name），
+#   以及把问题问到的多项拼成一列（问 full name and email 却把姓名拼成 full_name 一列）。
+EXTRA_RULE = """- 只输出问题问到的列，不多也不少。
+- 不要附带问题没问到的列，尤其是用于定位、排序、筛选的 id、主键、名称、分数。
+- 问题问到的每一项信息各占一列，不要合并（如姓和名要分两列，不要拼成一个全名）。"""
 
 
 def system_prompt(dialect: str) -> str:
