@@ -14,7 +14,7 @@ roles:
 
   sql_gen:
     provider: local
-    model: cn:deepseek-v4-pro
+    model: global:deepseek-v4.1-flash
     # 这是推理模型，思考过程也计入输出预算。给 2048 时实测出现过
     # "思考烧完 2048 额度、一个字没吐" 的空回复——那是配置错误不是能力不足。
     # 关掉思考能省钱，但那属于后面的成本优化实验，不能混进 baseline。
