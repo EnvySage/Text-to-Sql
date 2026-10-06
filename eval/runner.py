@@ -33,7 +33,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from agent import core
+from agent import core, prompt_fewshot
 from agent.baseline_dialect import generate_sql
 from agent.schema import column_values, merge_notes, schema_text
 from eval.dataset import Item, load_bird
@@ -41,6 +41,7 @@ from eval.metrics import METRIC_VERSION, needs_order, result_match
 from llm.base import LLMError, Usage
 from llm.router import Router
 from retrieval.descriptions import load_descriptions
+from retrieval.fewshot import BM25Index, Example
 from sandbox import open_sandbox
 
 console = Console()
@@ -100,6 +101,8 @@ def run_one(
     column_descriptions: bool = False,
     with_column_values: bool = False,
     use_tools: bool = False,
+    fewshot_index: BM25Index | None = None,
+    fewshot_k: int = 0,
 ) -> Record:
     """跑一道题：生成 SQL -> 执行 -> 和标准答案比对。
 
@@ -155,11 +158,20 @@ def run_one(
         steps, tcalls, hit_cap = outcome.steps, outcome.tool_calls, outcome.hit_cap
     else:
         try:
-            gen = generate_sql(
-                provider, dialect=sandbox.dialect,
-                schema=schema, question=item.question, evidence=item.evidence,
-                max_tokens=max_tokens,
-            )
+            if fewshot_index is not None and fewshot_k:
+                # 只在同一个库里找示例：跨库示例的表名在本题 schema 里不存在，是干扰。
+                gen = prompt_fewshot.generate_sql(
+                    provider, dialect=sandbox.dialect,
+                    schema=schema, question=item.question, evidence=item.evidence,
+                    examples=fewshot_index.top_k(item.question, fewshot_k, db_id=item.db_id),
+                    max_tokens=max_tokens,
+                )
+            else:
+                gen = generate_sql(
+                    provider, dialect=sandbox.dialect,
+                    schema=schema, question=item.question, evidence=item.evidence,
+                    max_tokens=max_tokens,
+                )
         except LLMError as exc:
             return Record(
                 qid=item.qid, db_id=item.db_id, question=item.question,
@@ -348,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="schema 里附带每列的真实取值（≤10 种全列，否则 3 个样例），ROADMAP 2.2")
     ap.add_argument("--tools", action="store_true",
                     help="给模型 execute_sql / submit_sql 工具，跑工具循环，ROADMAP 2.4")
+    ap.add_argument("--fewshot", type=int, default=0, metavar="K",
+                    help="prompt 里插入 K 条相似问题的标准 SQL；示例取自数据集中未被评测的题，同库检索")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -355,12 +369,33 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="eval/results")
     args = ap.parse_args(argv)
 
+    if args.tools and args.fewshot:
+        # 两条路径是分开写的，同时开会静默只走工具那条，说不清结论归谁。
+        console.print("[bold red]--tools 和 --fewshot 不能同时用[/]")
+        return 2
+
     code_version = git_version()
     items = load_bird(
         args.dataset, limit=args.limit, seed=args.seed,
         questions_file=args.questions, pg_dsn=args.pg_dsn,
     )
     dialect = "postgres" if args.pg_dsn else "sqlite"
+    fewshot_index = None
+    if args.fewshot:
+        # 示例只能取自"没有被评测的题"，否则等于把答案喂给模型。
+        # 同一份数据集按同一个 seed 抽样，被抽中的那些题在这里被排除，剩下的是干净的池子。
+        all_items = load_bird(
+            args.dataset, limit=None, questions_file=args.questions, pg_dsn=args.pg_dsn,
+        )
+        evaluated = {i.qid for i in items}
+        pool = [
+            Example(question=i.question, sql=i.gold_sql, db_id=i.db_id)
+            for i in all_items if i.qid not in evaluated
+        ]
+        fewshot_index = BM25Index(pool)
+        console.print(
+            f"few-shot：池子 {len(pool)} 条（已排除被评测的 {len(evaluated)} 题），每题取 {args.fewshot} 条"
+        )
     if args.column_descriptions:
         # 找不到说明就报错，不能静默退化成"无说明"——那样跑出来的数字名不副实。
         lacking = sorted({i.db_id for i in items if i.desc_dir is None})
@@ -392,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
                 column_descriptions=args.column_descriptions,
                 with_column_values=args.column_values,
                 use_tools=args.tools,
+                fewshot_index=fewshot_index,
+                fewshot_k=args.fewshot,
             ),
             workers=args.workers,
             stop_after=args.stop_after_call_failures,
@@ -412,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
             "column_descriptions": args.column_descriptions,
             "column_values": args.column_values,
             "use_tools": args.tools,
+            "fewshot": args.fewshot,
             "dialect": dialect, "questions": args.questions,
             "accuracy": s.accuracy, "exec_rate": s.exec_rate,
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,
