@@ -33,6 +33,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from agent import core
 from agent.baseline_dialect import generate_sql
 from agent.schema import column_values, merge_notes, schema_text
 from eval.dataset import Item, load_bird
@@ -67,6 +68,9 @@ class Record:
     cost_unit: str = "unknown"
     schema_chars: int = 0
     error: str = ""
+    steps: int = 0
+    tool_calls: int = 0
+    hit_cap: bool = False
 
 
 @dataclass
@@ -95,6 +99,7 @@ def run_one(
     max_rows: int,
     column_descriptions: bool = False,
     with_column_values: bool = False,
+    use_tools: bool = False,
 ) -> Record:
     """跑一道题：生成 SQL -> 执行 -> 和标准答案比对。
 
@@ -121,39 +126,61 @@ def run_one(
             elapsed_ms=(time.perf_counter() - started) * 1000, error=str(exc),
         )
 
-    try:
-        gen = generate_sql(
-            router.for_role("sql_gen"),
-            dialect=sandbox.dialect,
-            schema=schema, question=item.question, evidence=item.evidence,
-            max_tokens=router.max_tokens_for("sql_gen"),
-        )
-    except LLMError as exc:
-        return Record(
-            qid=item.qid, db_id=item.db_id, question=item.question,
-            difficulty=item.difficulty, gold_sql=item.gold_sql, pred_sql="",
-            correct=False, executable=False, reason=CALL_FAILED,
-            elapsed_ms=(time.perf_counter() - started) * 1000,
-            schema_chars=len(schema), error=str(exc),
-        )
+    provider = router.for_role("sql_gen")
+    max_tokens = router.max_tokens_for("sql_gen")
 
-    u = gen.usage
+    if use_tools:
+        outcome = core.consume(core.run(
+            item.question, provider=provider, sandbox=sandbox,
+            schema=schema, evidence=item.evidence, max_tokens=max_tokens,
+        ))
+        if outcome.error:
+            return Record(
+                qid=item.qid, db_id=item.db_id, question=item.question,
+                difficulty=item.difficulty, gold_sql=item.gold_sql, pred_sql="",
+                correct=False, executable=False, reason=CALL_FAILED,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                schema_chars=len(schema), error=outcome.error,
+                steps=outcome.steps, tool_calls=outcome.tool_calls, hit_cap=outcome.hit_cap,
+            )
+        sql, u = outcome.sql, outcome.usage
+        err = ""
+        steps, tcalls, hit_cap = outcome.steps, outcome.tool_calls, outcome.hit_cap
+    else:
+        try:
+            gen = generate_sql(
+                provider, dialect=sandbox.dialect,
+                schema=schema, question=item.question, evidence=item.evidence,
+                max_tokens=max_tokens,
+            )
+        except LLMError as exc:
+            return Record(
+                qid=item.qid, db_id=item.db_id, question=item.question,
+                difficulty=item.difficulty, gold_sql=item.gold_sql, pred_sql="",
+                correct=False, executable=False, reason=CALL_FAILED,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                schema_chars=len(schema), error=str(exc),
+            )
+        sql, u, err = gen.sql, gen.usage, gen.error
+        steps = tcalls = 0
+        hit_cap = False
+
     rec = Record(
         qid=item.qid, db_id=item.db_id, question=item.question,
-        difficulty=item.difficulty, gold_sql=item.gold_sql, pred_sql=gen.sql,
+        difficulty=item.difficulty, gold_sql=item.gold_sql, pred_sql=sql,
         correct=False, executable=False, reason="",
         elapsed_ms=(time.perf_counter() - started) * 1000,
         input_tokens=u.input_tokens, output_tokens=u.output_tokens,
         cached_tokens=u.cached_input_tokens, reasoning_tokens=u.reasoning_tokens,
         cost=u.cost, cost_unit=u.cost_unit, schema_chars=len(schema),
-        error=gen.error,
+        error=err, steps=steps, tool_calls=tcalls, hit_cap=hit_cap,
     )
 
-    if not gen.sql:
+    if not rec.pred_sql:
         rec.reason = "没有生成出 SQL"
         return rec
 
-    pred = sandbox.run(gen.sql)
+    pred = sandbox.run(rec.pred_sql)
     rec.executable = pred.ok
     if not pred.ok:
         rec.reason = f"预测 SQL 执行失败：{pred.error[:160]}"
@@ -312,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="schema 里附带 BIRD 的列说明（database_description/*.csv），ROADMAP 2.1")
     ap.add_argument("--column-values", action="store_true",
                     help="schema 里附带每列的真实取值（≤10 种全列，否则 3 个样例），ROADMAP 2.2")
+    ap.add_argument("--tools", action="store_true",
+                    help="给模型 execute_sql / submit_sql 工具，跑工具循环，ROADMAP 2.4")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -355,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
                 it, router, sample_rows=args.sample_rows, max_rows=args.max_rows,
                 column_descriptions=args.column_descriptions,
                 with_column_values=args.column_values,
+                use_tools=args.tools,
             ),
             workers=args.workers,
             stop_after=args.stop_after_call_failures,
@@ -374,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             "limit": args.limit, "seed": args.seed, "sample_rows": args.sample_rows,
             "column_descriptions": args.column_descriptions,
             "column_values": args.column_values,
+            "use_tools": args.tools,
             "dialect": dialect, "questions": args.questions,
             "accuracy": s.accuracy, "exec_rate": s.exec_rate,
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,
