@@ -103,6 +103,7 @@ def run_one(
     use_tools: bool = False,
     fewshot_index: BM25Index | None = None,
     fewshot_k: int = 0,
+    join_hints: bool = False,
 ) -> Record:
     """跑一道题：生成 SQL -> 执行 -> 和标准答案比对。
 
@@ -119,7 +120,7 @@ def run_one(
             column_values(item.db) if with_column_values else None,  # type: ignore[arg-type]
         )
         schema = schema_text(
-            item.db, sample_rows=sample_rows, notes=notes,  # type: ignore[arg-type]
+            item.db, sample_rows=sample_rows, notes=notes, join_hints=join_hints,  # type: ignore[arg-type]
         )
     except Exception as exc:
         return Record(
@@ -365,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--qids", default=None,
                     help="只跑这些题号（逗号分隔）。用于在固定子集上快速筛想法；"
                          "基线从已有结果文件里按同一批题号算，不用重跑。子集噪声更大，不能用来下结论")
+    ap.add_argument("--join-hints", action="store_true",
+                    help="schema 末尾附「可连接列」（同名出现在多张表的列），默认关")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -443,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
                 use_tools=args.tools,
                 fewshot_index=fewshot_index,
                 fewshot_k=args.fewshot,
+                join_hints=args.join_hints,
             ),
             workers=args.workers,
             stop_after=args.stop_after_call_failures,
@@ -464,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
             "column_values": args.column_values,
             "use_tools": args.tools,
             "fewshot": args.fewshot,
+            "join_hints": args.join_hints,
             "dialect": dialect, "questions": args.questions,
             "accuracy": s.accuracy, "exec_rate": s.exec_rate,
             "cost": s.usage.cost, "cost_unit": s.usage.cost_unit,

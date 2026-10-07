@@ -7,6 +7,7 @@ BIRD 里有的库表多列多，整库 schema 会很长——那个长度本身�
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
@@ -239,8 +240,44 @@ def merge_notes(*sources: dict[tuple[str, str], str] | None) -> dict[tuple[str, 
     return {k: " | ".join(v) for k, v in merged.items()}
 
 
+_IDENT_LIKE = re.compile(r"(?:id|code|uuid|key)$|^cds$", re.IGNORECASE)
+
+
+def _join_hints(tables: list[Table]) -> str:
+    """同名出现在多张表、且名字像标识符的列——通常就是连接键。
+
+    BIRD 的库把连接键设计成同名列（``CDSCode`` 在 frpm / satscores / schools 里都有），
+    但 DDL 里没有外键约束，模型得自己看出来。这里显式列出来，省它一次推断。
+
+    **必须过滤**：只按"同名"会捞出一堆假连接键（``amount`` 在三张表里都有，
+    ``type`` 也是），模型本来连得对，喂错的反而带偏。只留名字像标识符的
+    （``*_id`` / ``*code`` / ``uuid`` / ``*key``），11 个库上从 70 条降到 33 条，
+    留下的几乎全是真连接键。
+    """
+    tables_of: dict[str, set[str]] = {}
+    display: dict[str, str] = {}
+    for t in tables:
+        for c in t.columns:
+            key = normalize(c.name)
+            if not _IDENT_LIKE.search(key):
+                continue
+            tables_of.setdefault(key, set()).add(t.name)
+            display.setdefault(key, c.name)
+
+    shared = {k: v for k, v in tables_of.items() if len(v) >= 2}
+    if not shared:
+        return ""
+    lines = ["-- 可连接列（同名出现在多张表，通常就是连接键）："]
+    for key in sorted(shared):
+        lines.append(f"--   {display[key]}: {', '.join(sorted(shared[key]))}")
+    return "\n".join(lines)
+
+
 def render_schema(
-    tables: list[Table], notes: dict[tuple[str, str], str] | None = None
+    tables: list[Table],
+    notes: dict[tuple[str, str], str] | None = None,
+    *,
+    join_hints: bool = False,
 ) -> str:
     """渲染成 CREATE TABLE 风格的文本。
 
@@ -249,6 +286,9 @@ def render_schema(
 
     ``notes`` 是 ``{(表, 列): 注释}``（键经过 ``normalize``），以行尾注释拼在列后面，
     注释和列紧挨着，模型不用在两段文字之间来回对照。
+
+    ``join_hints`` 打开时在末尾附一段"可连接列"。**默认关**：打开会改变 schema 文本，
+    已有数字就不可比了。
     """
     blocks: list[str] = []
     for t in tables:
@@ -267,6 +307,11 @@ def render_schema(
                 cells = ", ".join("NULL" if v is None else str(v)[:40] for v in r)
                 lines.append(f"--   {cells}")
         blocks.append("\n".join(lines))
+
+    if join_hints:
+        hints = _join_hints(tables)
+        if hints:
+            blocks.append(hints)
     return "\n\n".join(blocks)
 
 
@@ -275,5 +320,8 @@ def schema_text(
     *,
     sample_rows: int = 0,
     notes: dict[tuple[str, str], str] | None = None,
+    join_hints: bool = False,
 ) -> str:
-    return render_schema(load_schema(db, sample_rows=sample_rows), notes)
+    return render_schema(
+        load_schema(db, sample_rows=sample_rows), notes, join_hints=join_hints
+    )
