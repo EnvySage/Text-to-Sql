@@ -55,3 +55,14 @@ def test_format_examples_empty_is_empty_string():
 def test_format_examples_contains_question_and_sql():
     s = format_examples([Example("有多少行？", "SELECT COUNT(*) FROM t", "db")])
     assert "有多少行？" in s and "SELECT COUNT(*) FROM t" in s
+
+
+def test_format_examples_includes_evidence_when_present():
+    """示例带上业务口径，模型才看得到"业务词 → 列"是怎么映射的。"""
+    s = format_examples([Example("q?", "SELECT 1", "db", evidence="复购指同一客户下单超过一次")])
+    assert "复购指同一客户下单超过一次" in s
+
+
+def test_format_examples_omits_evidence_line_when_empty():
+    s = format_examples([Example("q?", "SELECT 1", "db")])
+    assert "业务口径" not in s

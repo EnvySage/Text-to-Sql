@@ -27,20 +27,31 @@ def tokenize(text: str) -> list[str]:
 
 @dataclass(slots=True)
 class Example:
-    """一条 few-shot 示例。"""
+    """一条 few-shot 示例。
+
+    ``evidence`` 是 BIRD 的业务口径说明。带上它，模型能看到"业务词 → 列"是怎么映射的——
+    而"选错列"正是错题里最大的一类（见 EVAL 的 fs 明细）。
+    """
 
     question: str
     sql: str
     db_id: str = ""
+    evidence: str = ""
 
 
 def format_examples(examples: list[Example]) -> str:
     """把示例拼成给模型看的参考段。空列表返回空串。"""
     if not examples:
         return ""
-    blocks = [f"问题：{e.question}\nSQL：\n{e.sql}" for e in examples]
-    body = "\n\n".join(blocks)
-    return f"相似问题与标准答案（写法参考，问题不同，不要照抄）：\n\n{body}\n"
+    blocks = []
+    for e in examples:
+        body = f"问题：{e.question}"
+        if e.evidence.strip():
+            body += f"\n业务口径：{e.evidence.strip()}"
+        body += f"\nSQL：\n{e.sql}"
+        blocks.append(body)
+    joined = "\n\n".join(blocks)
+    return f"相似问题与标准答案（写法参考，问题不同，不要照抄）：\n\n{joined}\n"
 
 
 class BM25Index:

@@ -389,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         evaluated = {i.qid for i in items}
         pool = [
-            Example(question=i.question, sql=i.gold_sql, db_id=i.db_id)
+            Example(question=i.question, sql=i.gold_sql, db_id=i.db_id, evidence=i.evidence)
             for i in all_items if i.qid not in evaluated
         ]
         fewshot_index = BM25Index(pool)
