@@ -63,15 +63,15 @@ def test_merge_notes_skips_missing():
     assert merge_notes(None, {("t", "a"): "x"}, {("t", "a"): ""}) == {("t", "a"): "x"}
 
 
-def test_unsupported_dialect_raises_instead_of_falling_back():
+def test_unsupported_dialect_raises_instead_of_falling_back(monkeypatch):
     """没登记的方言必须**明确报错**，不能回退成 SQLite。
 
     曾经这里是个 `else` 兜底分支：MySQL 连接地址会被当文件路径去打开，报
     "unable to open database file"——排查方向被带偏到"文件路径写错了"。
     注册表分派 + 显式 raise 把这条堵死。见 docs/DESIGN.md 3.3。
+
+    三种真实方言现在都登记了，所以这里用一个**编造**的方言来验那条分支还在。
     """
-    target = "mysql://u:p@127.0.0.1:3306/bird"
-    with pytest.raises(NotImplementedError, match="mysql"):
-        load_schema(target)
-    with pytest.raises(NotImplementedError, match="mysql"):
-        column_values(target)
+    monkeypatch.setattr("agent.schema.dialect_of", lambda db: "oracle")
+    with pytest.raises(NotImplementedError, match="oracle"):
+        load_schema("oracle://u:p@127.0.0.1/bird")

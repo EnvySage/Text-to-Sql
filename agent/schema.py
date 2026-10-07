@@ -1,4 +1,4 @@
-"""从数据库里抽取 schema，压成适合塞进 prompt 的文本。支持 SQLite 和 PostgreSQL。
+"""从数据库里抽取 schema，压成适合塞进 prompt 的文本。支持 SQLite / PostgreSQL / MySQL。
 
 baseline 阶段是把整库 schema 全部塞进去。这么做是故意的：先量出
 "不做任何检索"的下限，第二周的 schema 裁剪才有一个可对比的基准。
@@ -15,8 +15,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
+import pymysql
+
 from retrieval.descriptions import normalize
 from sandbox import dialect_of
+from sandbox.mysql import connect_readonly as connect_mysql_readonly
 from sandbox.postgres import connect_readonly
 
 
@@ -153,12 +156,55 @@ def _load_schema_postgres(db: str | Path, *, sample_rows: int) -> list[Table]:
         conn.close()
 
 
+# information_schema 就够了。COLUMN_TYPE 给出带长度/精度的类型（varchar(200)、decimal(10,2)），
+# TABLE_SCHEMA = DATABASE() 只列当前库——看得到查不了的表不会混进来让模型白白报错。
+_MYSQL_COLUMNS = """
+SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY = 'PRI'
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+ORDER BY TABLE_NAME, ORDINAL_POSITION
+"""
+
+
+def _quote_mysql_ident(name: str) -> str:
+    """MySQL 的标识符引号是反引号，里面的反引号要写两遍。"""
+    return "`" + name.replace("`", "``") + "`"
+
+
+def _load_schema_mysql(db: str | Path, *, sample_rows: int) -> list[Table]:
+    """MySQL 的表名、列名用反引号包起来。
+
+    列名里空格和保留字（``order``、``key``、``desc``）都很常见，不加引号写不出合法 SQL。
+    """
+    conn = connect_readonly(str(db))
+    try:
+        tables: dict[str, Table] = {}
+        with conn.cursor() as cur:
+            cur.execute(_MYSQL_COLUMNS)
+            for tbl, col, typ, pk in cur.fetchall():
+                t = tables.setdefault(tbl, Table(name=tbl, columns=[], sample_rows=[]))
+                t.columns.append(Column(name=col, type=typ, pk=bool(pk)))
+        if sample_rows > 0:
+            for t in tables.values():
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(f"SELECT * FROM {_quote_mysql_ident(t.name)} "
+                                    f"LIMIT {int(sample_rows)}")
+                        t.sample_rows = [tuple(r) for r in cur.fetchall()]
+                except pymysql.Error:
+                    t.sample_rows = []
+        return list(tables.values())
+    finally:
+        conn.close()
+
+
 # 方言 → loader。加一种库只需在这里登记一行，load_schema 的分派不用改。
 # 注册表而不是 if/elif 链：漏登记时 load_schema 会明确报"尚未支持"，
 # 而 if/elif 的 else 分支会把新方言静默当成 SQLite 处理。
 _LOADERS: dict[str, Callable[..., list[Table]]] = {
     "sqlite": _load_schema_sqlite,
     "postgres": _load_schema_postgres,
+    "mysql": _load_schema_mysql,
 }
 
 
@@ -188,18 +234,47 @@ def describe_values(values: list[Any]) -> str:
     return "样例：" + ", ".join(_literal(v) for v in values[:SAMPLE_K])
 
 
-def _introspection_conn(db: str | Path) -> tuple[Any, Callable[[str], str]]:
+class _Introspection:
+    """列取值要用的那点能力：跑一条 SQL 拿回行、出错回滚、用完关掉。
+
+    三种驱动的用法不一样——sqlite 和 psycopg 是 ``conn.execute(sql)``，
+    pymysql 得先 ``conn.cursor()``。这里抹平，``column_values`` 只写一份。
+    """
+
+    def __init__(self, conn: Any, *, via_cursor: bool = False) -> None:
+        self._conn = conn
+        self._via_cursor = via_cursor
+
+    def execute(self, sql: str) -> list[tuple]:
+        if self._via_cursor:
+            with self._conn.cursor() as cur:
+                cur.execute(sql)
+                return [tuple(r) for r in cur.fetchall()]
+        return list(self._conn.execute(sql))
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def _introspection_conn(db: str | Path) -> tuple[_Introspection, Callable[[str], str]]:
     """列取值要的连接和"标识符怎么加引号"，按方言给一份。
 
     返回 ``(连接, 引号函数)``。引号规则必须跟着方言走：PG 取回来的名字已经由
-    ``quote_ident`` 按需加过引号，再包一层会变成字面量；SQLite 的名字是裸的，得自己包。
+    ``quote_ident`` 按需加过引号，再包一层会变成字面量；SQLite 的名字是裸的，得自己包；
+    MySQL 用反引号。
 
     这里**不能加缓存**：连接是有状态、要关的资源，同一个连接被后续调用重复使用会
     让 ``finally`` 把它关掉之后的下一次调用拿到一个已关闭的连接。
     """
-    if dialect_of(db) == "postgres":
-        return connect_readonly(str(db)), lambda name: name
-    return _connect_sqlite_readonly(db), _quote_sqlite_ident
+    dialect = dialect_of(db)
+    if dialect == "postgres":
+        return _Introspection(connect_readonly(str(db))), lambda name: name
+    if dialect == "mysql":
+        return _Introspection(connect_mysql_readonly(str(db)), via_cursor=True), _quote_mysql_ident
+    return _Introspection(_connect_sqlite_readonly(db)), _quote_sqlite_ident
 
 
 @lru_cache(maxsize=32)

@@ -157,7 +157,7 @@ Web 界面投入控制在两天内。
 |---|---|---|
 | M.1 | `Sandbox` 协议；guard 方言加固（`SELECT INTO`、行锁、各方言危险函数）；dialect 一路传到 guard | ✅ 09-25 |
 | M.2 | `PostgresSandbox`：账号自检 + 只读事务 + 服务端游标 + `statement_timeout`；`open_sandbox` 按连接地址选实现；schema 读 `pg_catalog` | ✅ 09-25 |
-| M.3 | `MySQLSandbox`：同上 | 📋 需引入 pymysql（待同意） |
+| M.3 | `MySQLSandbox`：同上 | ✅ 10-07：账号自检（`SHOW GRANTS` 里出现写权限/管理权限就拒绝）、只读会话、`MAX_EXECUTION_TIME`、服务端游标取行；`agent/schema.py` 的 `_LOADERS` 登记 `_load_schema_mysql`（反引号引标识符）。引入 `pymysql`。**未在真实 MySQL 上端到端验证**——本机没有可用的 MySQL 实例 |
 | M.4 | 公共执行逻辑提到 `BaseSandbox`，截断检测只留一份 | ✅ 09-25 |
 | M.5 | 多方言评测：BIRD Mini-Dev 同一批题，SQLite 与 PG 各跑一次，逐题配对比较 | 🚧 PG 完成：**47.6%**（09-25，250 题，32.8 credit）；Mini-Dev SQLite 对照待定 💰 ~30 credit |
 
@@ -180,6 +180,6 @@ Web 界面投入控制在两天内。
 | 6 | `config/pricing.yaml` 的价格未核实 | 目前网关上报实际扣费，不影响；换厂商前核实 | 暂无 |
 | 7 | `needs_order` 启发式的误判率未量化 | 抽查 50 题人工标注 | 影响准确率的可信度 |
 | 8 | `smoke.py` 放在项目根目录 | 可移到 `scripts/`，非必须 | 无 |
-| 9 | MySQL 实现要引入 `pymysql`（`psycopg` 已于 09-25 经用户同意引入） | 需要时再做 | 阻塞 M.3 |
+| 9 | ~~MySQL 实现要引入 `pymysql`~~ | ✅ 10-07 已引入并实现（M.3）；**尚缺真实 MySQL 上的端到端验证** | — |
 | 10 | `README.md` 过时（写的是 44 个测试、没有 PG 和阶段 2 的数字），已公开在 GitHub | 阶段 4 重写 | 对外展示 |
 | 11 | ~~`sandbox/` 有 2 条未定性的疑点（`guard.py` 的 `exp.With` 死分支、MySQL `INTO OUTFILE` 靠解析失败兜底）~~ | ✅ 09-28 S1 已修复（见 [`SANDBOX-NOTES.md`](SANDBOX-NOTES.md)）；S3 待 MySQL 执行器实现时一并处理 | — |

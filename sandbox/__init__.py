@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sandbox.base import Sandbox
+from sandbox.mysql import MySQLSandbox
 from sandbox.sqlite import SQLiteSandbox
 from sandbox.postgres import PostgresSandbox
 
@@ -27,6 +28,5 @@ def open_sandbox(target: str | Path, **kwargs) -> Sandbox:
     if dialect == "postgres":
         return PostgresSandbox(str(target), **kwargs)
     if dialect == "mysql":
-        # 不能退化成当文件路径处理：那样报的是"数据库不存在"，排查方向会被带偏。
-        raise NotImplementedError("MySQL 执行器尚未实现，见 docs/ROADMAP.md M.3")
+        return MySQLSandbox(str(target), **kwargs)
     return SQLiteSandbox(target, **kwargs)

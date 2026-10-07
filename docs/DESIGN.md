@@ -86,7 +86,7 @@
 | `guard.py` | ✅ | sqlglot 按方言解析 AST，白名单只放行单条 SELECT/WITH/集合查询；拒绝 `SELECT INTO`、行锁、危险函数；补 LIMIT |
 | `sqlite.py` | ✅ | `SQLiteSandbox`：只读连接执行，超时中断，行数上限，失败返回而不抛异常 |
 | `postgres.py` | ✅ | `PostgresSandbox`：账号自检、只读事务、服务端游标、服务端超时 |
-| `mysql.py` | 📋 | `MySQLSandbox`，需要引入 pymysql（待用户同意） |
+| `mysql.py` | ✅ | `MySQLSandbox`：账号自检（`SHOW GRANTS` 里出现写权限或管理权限就拒绝）、只读会话、服务端超时、服务端游标取行 |
 
 两道防线相互独立：AST 白名单挡语义，连接权限挡驱动层写入。任何一道都不能因为"另一道已经挡了"而被删掉。
 
@@ -100,7 +100,7 @@
 |---|---|---|---|
 | SQLite ✅ | AST 白名单 + 危险函数 | `mode=ro` URI | 另起线程调 `interrupt()` |
 | PostgreSQL ✅ | 同左 | **账号自检**（超级用户 / 任一表可写 / 服务器文件角色 → 拒绝执行）+ 只读事务 + 服务端游标 | 服务端 `statement_timeout` |
-| MySQL 📋 | 同左 | **只读账号** + `SET SESSION TRANSACTION READ ONLY` | 服务端 `MAX_EXECUTION_TIME` |
+| MySQL ✅ | 同左 | **只读账号**（`SHOW GRANTS` 自检）+ `SET SESSION TRANSACTION READ ONLY` + 服务端游标取行 | 服务端 `MAX_EXECUTION_TIME` |
 
 - 服务端库上，和 `mode=ro` 同等强度的是**账号权限**。会话级只读能被一条 `SET` 改回去，只能算补充。
 - 在服务端库上，第二道防线必须有，不能只当备用：PG/MySQL 的自定义函数可以带写副作用，AST 看不出来，

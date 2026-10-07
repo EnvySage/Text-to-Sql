@@ -30,9 +30,15 @@ def test_open_sandbox_passes_limits_through(sales_db):
     assert sb.max_rows == 7 and sb.timeout == 3
 
 
-def test_mysql_is_not_silently_treated_as_file():
-    with pytest.raises(NotImplementedError, match="MySQL"):
-        open_sandbox("mysql://u:p@localhost/db")
+def test_mysql_url_becomes_a_mysql_sandbox_not_a_file_path():
+    """``mysql://`` 地址必须走 MySQL 执行器。
+
+    曾经这里是兜底分支：MySQL 地址被当文件路径打开，报 "unable to open database file"，
+    排查方向被带偏到"文件路径写错了"。现在 mysql 已登记进注册表。
+    """
+    from sandbox.mysql import MySQLSandbox
+
+    assert isinstance(open_sandbox("mysql://u:p@localhost/db"), MySQLSandbox)
 
 
 def test_connection_failure_returns_error_not_raises():
