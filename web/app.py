@@ -13,12 +13,17 @@ import time
 from pathlib import Path
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from agent import core
 from agent.schema import schema_text
 from llm.router import Router
 from sandbox import open_sandbox
 from sandbox.deny import DenyColumns
+
+# Streamlit 每次交互都重跑整个脚本，load_dotenv 是幂等的，重复调没有副作用。
+# 不加载的话 Router 找不到 $LOCAL_API_KEY 会直接抛错。
+load_dotenv()
 
 st.set_page_config(page_title="数据分析 agent", page_icon="🔎", layout="wide")
 
