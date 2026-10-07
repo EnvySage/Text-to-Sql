@@ -11,3 +11,5 @@ eval/datasets/bird_minidev/
 
 # 术语表：模型问用户后攒下来的业务口径，属于使用者的数据
 terms.json
+# 轨迹文件：Web 界面勾了"存轨迹"会写到仓库根目录
+/trace.json
