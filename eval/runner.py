@@ -362,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="给模型 execute_sql / submit_sql 工具，跑工具循环，ROADMAP 2.4")
     ap.add_argument("--fewshot", type=int, default=0, metavar="K",
                     help="prompt 里插入 K 条相似问题的标准 SQL；示例取自数据集中未被评测的题，同库检索")
+    ap.add_argument("--qids", default=None,
+                    help="只跑这些题号（逗号分隔）。用于在固定子集上快速筛想法；"
+                         "基线从已有结果文件里按同一批题号算，不用重跑。子集噪声更大，不能用来下结论")
     ap.add_argument("--max-rows", type=int, default=2000)
     ap.add_argument("--stop-after-call-failures", type=int, default=3,
                     help="连续这么多题模型调用失败（通常是限流）就停止派发新题，已完成的照常保存；0 表示不熔断")
@@ -380,6 +383,17 @@ def main(argv: list[str] | None = None) -> int:
         questions_file=args.questions, pg_dsn=args.pg_dsn,
     )
     dialect = "postgres" if args.pg_dsn else "sqlite"
+    if args.qids:
+        # 固定子集：题号取自同一次抽样的结果，基线可以用已有的结果文件按同一批题号算出来，
+        # 不用重跑。子集噪声更大，只能用来筛掉明显没用的想法，不能拿来下结论。
+        want = [q.strip() for q in args.qids.split(",") if q.strip()]
+        index = {i.qid: i for i in items}
+        lacking = [q for q in want if q not in index]
+        if lacking:
+            console.print(f"[bold red]这些题号不在当前抽样里（{args.limit}/{args.seed}）：{lacking[:10]}[/]")
+            return 2
+        items = [index[q] for q in want]
+        console.print(f"只跑指定的 {len(items)} 题（子集）")
     fewshot_index = None
     if args.fewshot:
         # 示例只能取自"没有被评测的题"，否则等于把答案喂给模型。
