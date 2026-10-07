@@ -184,6 +184,14 @@ def test_conclude_swallows_llm_error():
     assert core.conclude("问", "SELECT 1", "count\n1", provider=Boom())[0] == ""
 
 
+def test_ask_instructions_only_appear_when_a_user_is_present():
+    """没人在场就别教它问——否则它会对着一堵墙 ask_user。"""
+    assert "ask_user" not in core.system_prompt("sqlite")
+    assert "ask_user" in core.system_prompt("sqlite", can_ask=True)
+    # 方言名照旧跟着走
+    assert "PostgreSQL" in core.system_prompt("postgres", can_ask=True)
+
+
 def test_ask_user_tool_only_offered_when_callback_given():
     """评测路径的工具集必须逐字节不变——不给 ask 就不挂 ask_user。"""
     base = dict(sandbox=FakeSandbox(), schema="", dialect="sqlite")

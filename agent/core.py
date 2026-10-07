@@ -38,14 +38,23 @@ TOOL_SUFFIX = """
 - submit_sql：确定之后，用它提交最终答案。
 不确定时先 execute_sql 验证，确认无误再用 submit_sql 交卷。"""
 
+# 有真人在场时才拼这段。措辞要**硬**——实测过：不写这段，模型面对模糊问题
+# 会一路硬猜，20 次工具调用撞上限也不问一句。
+ASK_SUFFIX = """
 
-def system_prompt(dialect: str) -> str:
-    """方言版 baseline prompt + 工具说明。
+另外：问题里的**业务名词**（不是列名）如果含义不明确、不同理解会写出不同的 SQL，
+**先用 ask_user 问用户，不要自己猜**。一次只问一个词，给 2-3 个候选。
+能自己查出来的（表结构、有哪些列）不要问。"""
+
+
+def system_prompt(dialect: str, *, can_ask: bool = False) -> str:
+    """方言版 baseline prompt + 工具说明（+ 有真人在场时的询问说明）。
 
     ``baseline_dialect.system_prompt("sqlite") == baseline.SYSTEM``，所以 SQLite 上
     的 prompt 和加工具之前的常量逐字节相同，已有数字不受影响。
     """
-    return baseline_dialect.system_prompt(dialect) + TOOL_SUFFIX
+    prompt = baseline_dialect.system_prompt(dialect) + TOOL_SUFFIX
+    return prompt + ASK_SUFFIX if can_ask else prompt
 
 
 @dataclass(slots=True)
@@ -91,7 +100,8 @@ def run(
     for step in range(1, max_steps + 1):
         try:
             resp = provider.chat(
-                system=system_prompt(dialect), messages=messages, tools=tools,
+                system=system_prompt(dialect, can_ask=ask is not None),
+                messages=messages, tools=tools,
                 max_tokens=max_tokens,
             )
             # Usage.__add__ 遇到混合 cost_unit 会抛 ValueError。放在 try 里收敛成
