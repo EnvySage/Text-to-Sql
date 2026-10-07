@@ -400,3 +400,45 @@ def schema_text(
     return render_schema(
         load_schema(db, sample_rows=sample_rows), notes, join_hints=join_hints
     )
+
+
+def schema_index(db: str | Path) -> str:
+    """只列表名——给大库用的索引（2.5 schema 裁剪）。
+
+    实测 xingchengwms（148 张表、2037 列）：完整 DDL 要 6 万字符，只列表名 2.6K——
+    **小 23 倍**。而表名本身就是信号（``wms_inventory`` 一看就是库存），模型据此判断
+    该看哪几张，再用 ``get_schema`` 工具取详细结构（单张平均 400 字符）。
+
+    为什么不按关键词挑相关表：**中文提问对英文列名，一个词都对不上**
+    （"库存数量" vs ``stock_quantity``）。让模型自己挑，跟语言无关。
+    """
+    tables = load_schema(db)
+    lines = [
+        f"这个库有 {len(tables)} 张表，下面只列了表名。",
+        "要看某张表的完整结构（列名、类型、注释、样例值），调用 get_schema 工具。",
+        "",
+    ]
+    lines += [f"- {t.name}" for t in tables]
+    return "\n".join(lines)
+
+
+def table_ddl(
+    db: str | Path,
+    table: str,
+    *,
+    notes: dict[tuple[str, str], str] | None = None,
+    join_hints: bool = False,
+) -> str:
+    """单张表的完整 DDL，给 ``get_schema`` 工具用。
+
+    表名对不上时**把现有的表名列一部分回去**——模型拼错名字是常事，
+    直接说"没有这张表"它只能瞎猜，给几个候选它就能改。
+    """
+    tables = load_schema(db)
+    low = str(table).strip().lower()
+    match = next((t for t in tables if t.name.lower() == low), None)
+    if match is None:
+        shown = ", ".join(t.name for t in tables[:40])
+        more = f"（共 {len(tables)} 张，这里只列前 40 张）" if len(tables) > 40 else ""
+        return f"没有名为 {table!r} 的表。{more}现有的表：{shown}"
+    return render_schema([match], notes, join_hints=join_hints)

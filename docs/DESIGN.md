@@ -138,7 +138,11 @@
 | `descriptions.py` | ✅ | 读 BIRD 的 `database_description/<表>.csv`，得到 `{(表, 列): 说明}`，由 `agent/schema.py` 以 `-- 注释` 形式拼在每列后面 |
 | `fewshot.py` | ✅ | BM25 检索：从"问题 + 标准 SQL"配对里挑最像当前问题的几条，由 `agent/prompt_fewshot.py` 拼进 prompt。纯 Python，不引第三方依赖。**只在同一个库里检索**——跨库示例的表名在本题 schema 里不存在，是干扰 |
 
-📋 规划：schema 裁剪（2.5）。
+📋 规划：暂无。
+
+**schema 裁剪（2.5）不在这里**：它要读数据库，而能力层之间不能互相依赖（`retrieval/` 不能用
+`sandbox/` 的连接）。落在 `agent/schema.py` 的 `schema_index` / `table_ddl` + `agent/core.py`
+的 `get_schema` 工具。
 
 few-shot 的示例池只能取"没有被评测的题"（同一份数据按同一 seed 抽样，被抽中的排除），
 否则等于把答案喂给模型。见 D22、`eval/runner.py` 的 `--fewshot`。

@@ -23,13 +23,17 @@ from rich.syntax import Syntax
 
 from agent import core
 from agent.events import AgentEvent
-from agent.schema import schema_text
+from agent.schema import schema_index, schema_text, table_ddl
 from llm.router import Router
 from sandbox import open_sandbox
 from sandbox.base import Sandbox
 from sandbox.deny import DenyColumns
 
 console = Console()
+
+# 整库 DDL 超过这个长度就改用表名清单 + get_schema（2.5 schema 裁剪）。
+# 20000 字符约等于 6-7K token，小库（几十张表）够用；148 张表的库实测 6 万字符。
+SCHEMA_MAX_CHARS = 20000
 
 
 class Renderer:
@@ -224,9 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     sandbox: Sandbox = open_sandbox(args.db)
     if deny:
         sandbox = DenyColumns(sandbox, deny)
-    schema = schema_text(args.db)
     router = Router.from_file()
     provider = router.for_role("sql_gen")
+
+    # 2.5 schema 裁剪：整库 DDL 塞不下时（大库实测 6 万字符），prompt 里只放表名清单，
+    # 模型用 get_schema 按需取。小库照旧全给——多一次工具调用反而慢。
+    full = schema_text(args.db)
+    if len(full) > SCHEMA_MAX_CHARS:
+        schema = schema_index(args.db)
+        schema_lookup = lambda name: table_ddl(args.db, name)  # noqa: E731
+        console.print(f"[dim]schema {len(full):,} 字符放不下，改用表名清单 + get_schema[/]")
+    else:
+        schema, schema_lookup = full, None
 
     console.print(Panel(
         f"[bold]{args.question}[/]\n"
@@ -251,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         args.question, provider=provider, sandbox=sandbox, schema=schema,
         dialect=sandbox.dialect, evidence=evidence, max_steps=args.max_steps,
         max_tokens=router.max_tokens_for("sql_gen"), ask=ask,
+        schema_lookup=schema_lookup,
     ):
         events.append(e)
         renderer(e)          # 边跑边打，不攒到最后

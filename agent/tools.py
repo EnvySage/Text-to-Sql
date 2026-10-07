@@ -51,6 +51,23 @@ ASK_USER = ToolSpec(
     },
 )
 
-# 默认工具集。``ask_user`` 不在里面——它要有真人在场才有意义，
-# 由 ``core.run(ask=...)`` 决定要不要加上去（见那个函数的说明）。
+GET_SCHEMA = ToolSpec(
+    name="get_schema",
+    description=(
+        "查看某张表的完整结构（列名、类型、注释、样例值）。"
+        "大库的 prompt 里只给表名清单，写 SQL 前用它取你需要的表。"
+        "一次取一张，别把整个库都拉一遍。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "table": {"type": "string", "description": "表名，如 wms_inventory"},
+        },
+        "required": ["table"],
+    },
+)
+
+# 默认工具集。``ask_user`` 和 ``get_schema`` 都不在里面——
+# 前者要有真人在场，后者要大库的 prompt 才只给表名清单，
+# 都由 ``core.run(...)`` 的参数决定要不要加上去（见那个函数的说明）。
 TOOLS: list[ToolSpec] = [EXECUTE_SQL, SUBMIT_SQL]

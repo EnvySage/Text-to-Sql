@@ -214,6 +214,37 @@ def test_ask_instructions_only_appear_when_a_user_is_present():
     assert "PostgreSQL" in core.system_prompt("postgres", can_ask=True)
 
 
+def test_get_schema_tool_only_offered_when_lookup_given():
+    """小库的 schema 全在 prompt 里，挂 get_schema 只会让模型多绕一步。"""
+    base = dict(sandbox=FakeSandbox(), schema="", dialect="sqlite")
+    p1 = FakeProvider([_resp(calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})])])
+    list(core.run("问题", provider=p1, **base))
+    assert "get_schema" not in [t.name for t in p1.calls[0]["tools"]]
+
+    p2 = FakeProvider([_resp(calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})])])
+    list(core.run("问题", provider=p2, schema_lookup=lambda t: "DDL", **base))
+    assert "get_schema" in [t.name for t in p2.calls[0]["tools"]]
+
+
+def test_get_schema_feeds_the_ddl_back():
+    seen = []
+
+    def _lookup(name):
+        seen.append(name)
+        return f"CREATE TABLE {name} (a INT);"
+
+    script = [
+        _resp(calls=[ToolCall("c1", "get_schema", {"table": "orders"})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
+    ]
+    p = FakeProvider(script)
+    list(core.run("问", provider=p, sandbox=FakeSandbox(), schema="",
+                  dialect="sqlite", schema_lookup=_lookup))
+    assert seen == ["orders"]
+    results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert "CREATE TABLE orders" in results[0].tool_results[0].content
+
+
 def test_ask_user_tool_only_offered_when_callback_given():
     """评测路径的工具集必须逐字节不变——不给 ask 就不挂 ask_user。"""
     base = dict(sandbox=FakeSandbox(), schema="", dialect="sqlite")

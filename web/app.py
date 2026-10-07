@@ -18,13 +18,16 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from agent import core
-from agent.schema import schema_text
+from agent.schema import schema_index, schema_text, table_ddl
 from llm.router import Router
 from sandbox import open_sandbox
 from sandbox.deny import DenyColumns
 
 # Streamlit 每次交互都重跑整个脚本，load_dotenv 幂等，重复调没有副作用。
 load_dotenv()
+
+# 整库 DDL 超过这个长度就改用表名清单 + get_schema（2.5 schema 裁剪）。
+SCHEMA_MAX_CHARS = 20000
 
 st.set_page_config(page_title="数据分析 agent", page_icon="🔎", layout="wide")
 
@@ -102,14 +105,21 @@ class AgentRun:
             sandbox = open_sandbox(self.db)
             if self.deny:
                 sandbox = DenyColumns(sandbox, self.deny)
-            schema = schema_text(self.db)
+            # 2.5 schema 裁剪：整库 DDL 塞不下时（大库实测 6 万字符），只放表名清单，
+            # 模型用 get_schema 按需取。小库照旧全给。
+            full = schema_text(self.db)
+            if len(full) > SCHEMA_MAX_CHARS:
+                schema = schema_index(self.db)
+                schema_lookup = lambda name: table_ddl(self.db, name)  # noqa: E731
+            else:
+                schema, schema_lookup = full, None
             router = Router.from_file()
             provider = router.for_role("sql_gen")
             for e in core.run(
                 self.question, provider=provider, sandbox=sandbox, schema=schema,
                 dialect=sandbox.dialect, evidence=_terms_for(self.question, self.terms),
                 max_steps=self.max_steps, max_tokens=router.max_tokens_for("sql_gen"),
-                ask=self._ask,
+                ask=self._ask, schema_lookup=schema_lookup,
             ):
                 with self._lock:
                     self.events.append(e)

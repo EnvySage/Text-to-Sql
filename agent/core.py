@@ -12,7 +12,7 @@ from typing import Callable, Iterator
 
 from agent import baseline, baseline_dialect
 from agent.events import AgentEvent
-from agent.tools import ASK_USER, TOOLS
+from agent.tools import ASK_USER, GET_SCHEMA, TOOLS
 from llm.base import LLMError, LLMProvider, Message, ToolResult, Usage
 from sandbox.base import Sandbox
 
@@ -80,16 +80,24 @@ def run(
     max_steps: int = MAX_STEPS_DEFAULT,
     max_tokens: int = 8192,
     ask: Callable[[dict], str] | None = None,
+    schema_lookup: Callable[[str], str] | None = None,
 ) -> Iterator[AgentEvent]:
     """跑一轮工具循环，产出事件流。最后必是一个 ``final`` 或 ``error``。
 
     ``dialect`` 决定 system prompt 里的方言名：PG 上跑却告诉模型"你是 SQLite 专家"
     不会报错，只会静默写错 SQL，所以这个参数不能由默认值兜住。
 
-    ``ask`` 是"问用户"的回调，给了才会把 ``ask_user`` 工具挂上去。**不给就不挂**——
-    评测路径的工具集因此逐字节不变，已有数字不受影响。回调收到工具参数，返回用户的回答。
+    ``ask`` 是"问用户"的回调，给了才会把 ``ask_user`` 工具挂上去。
+    ``schema_lookup`` 是"取某张表的完整结构"，给了才挂 ``get_schema``——**大库才需要**：
+    prompt 里放不下整库 DDL 时改放表名清单，模型自己按需取（2.5 schema 裁剪）。
+
+    两个都不给时工具集就是 ``TOOLS`` 本身，评测路径因此逐字节不变。
     """
-    tools = [*TOOLS, ASK_USER] if ask is not None else TOOLS
+    tools = list(TOOLS)
+    if ask is not None:
+        tools.append(ASK_USER)
+    if schema_lookup is not None:
+        tools.append(GET_SCHEMA)
     ev = f"\n业务口径说明：{evidence}\n" if evidence else ""
     messages = [Message.user(baseline.USER_TEMPLATE.format(
         schema=schema, evidence=ev, question=question))]
@@ -141,6 +149,16 @@ def run(
                     "steps": step, "tool_calls": n_calls, "hit_cap": False,
                 }, usage=usage)
                 return
+            if tc.name == "get_schema":
+                asked = tc.args if isinstance(tc.args, dict) else {}
+                text = (schema_lookup(str(asked.get("table", "")))
+                        if schema_lookup else "这个库的结构已经全在 prompt 里了。")
+                yield AgentEvent("tool_call", {"name": tc.name, "args": asked})
+                yield AgentEvent("tool_result", {
+                    "name": tc.name, "ok": True, "rows": 0, "error": "", "preview": text,
+                })
+                results.append(ToolResult(call_id=tc.id, content=text, is_error=False))
+                continue
             if tc.name == "ask_user":
                 n_asks += 1
                 asked = tc.args if isinstance(tc.args, dict) else {}
