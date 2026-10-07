@@ -181,6 +181,8 @@ class OpenAICompatProvider:
             tool_calls=calls,
             stop_reason=_FINISH_REASON.get(choice.finish_reason or "", "other"),
             usage=_usage(resp, self.model),
+            # 推理模型的思考过程。网关不一定回这个字段，取不到就是空串。
+            reasoning=getattr(msg, "reasoning_content", None) or "",
             raw=resp,
         )
 

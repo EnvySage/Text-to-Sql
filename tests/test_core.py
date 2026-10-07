@@ -139,6 +139,20 @@ def test_system_prompt_follows_dialect():
     assert "SQLite" not in p.calls[0]["system"]
 
 
+def test_step_start_carries_reasoning_and_text():
+    """界面要显示「它这一步在想什么」，所以思考和文字必须跟着事件一起出去。"""
+    r = LLMResponse(
+        text="我看看有哪些管理员字段", reasoning="先查数据分布，再决定用哪一组管理员列",
+        tool_calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})],
+        stop_reason="tool_use", usage=Usage(),
+    )
+    events = list(core.run("问题", provider=FakeProvider([r]), sandbox=FakeSandbox(),
+                           schema="", dialect="sqlite"))
+    assert events[0].type == "step_start"
+    assert events[0].payload["reasoning"] == "先查数据分布，再决定用哪一组管理员列"
+    assert events[0].payload["text"] == "我看看有哪些管理员字段"
+
+
 def test_llm_error_converges_to_error_event():
     """provider 抛 LLMError：收敛成 error 事件，不冒泡。"""
     class BoomProvider:

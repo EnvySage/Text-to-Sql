@@ -119,6 +119,9 @@ class LLMResponse:
     tool_calls: list[ToolCall]
     stop_reason: StopReason
     usage: Usage
+    # 推理模型的思考过程。各家字段名不同（OpenAI 兼容网关多是 reasoning_content），
+    # 由适配层负责取出来。**不计费之外没有别的用途**：只给界面展示，不参与任何判断。
+    reasoning: str = ""
     raw: Any = None
 
     def to_message(self) -> Message:

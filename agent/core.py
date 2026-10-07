@@ -73,7 +73,6 @@ def run(
     n_calls = 0
 
     for step in range(1, max_steps + 1):
-        yield AgentEvent("step_start", {"step": step})
         try:
             resp = provider.chat(
                 system=system_prompt(dialect), messages=messages, tools=TOOLS,
@@ -91,6 +90,12 @@ def run(
                                        "steps": step, "tool_calls": n_calls},
                              usage=usage)
             return
+
+        # 在模型返回**之后**发：这一步的产出（思考和文字）要跟着事件一起给出去，
+        # 界面才显示得出"它这一步在想什么"。顺序没变——step_start 仍是每步第一个事件。
+        yield AgentEvent("step_start", {
+            "step": step, "reasoning": resp.reasoning, "text": resp.text or "",
+        })
 
         if not resp.tool_calls:
             # 模型没调工具就停了：走兜底，从文字里抠（和单次路径同源）。
