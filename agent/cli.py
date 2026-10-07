@@ -32,20 +32,26 @@ from sandbox.deny import DenyColumns
 console = Console()
 
 
-def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
-    """渲染事件流。实时跑和重放走的是同一个函数。
+class Renderer:
+    """逐事件渲染。**流式**——每来一个事件就打印，不攒到最后。
+
+    攒到最后再打，会让人以为程序卡住了：一轮工具循环可能跑十几秒到几十秒。
 
     **模型说的话和查出来的数据都要 ``escape``**：它们里面可能有 ``[`` 之类的字符，
     rich 会当成标记去解析，轻则显示错乱，重则直接抛 MarkupError 把整个程序打断。
     """
-    step = 0
-    for e in events:
+
+    def __init__(self, *, show_thinking: bool = True) -> None:
+        self.show_thinking = show_thinking
+        self.step = 0
+
+    def __call__(self, e: AgentEvent) -> None:
         p = e.payload
         if e.type == "step_start":
-            step = p.get("step", step)
-            console.print(f"\n[bold cyan]── 第 {step} 步 ──[/]")
+            self.step = p.get("step", self.step)
+            console.print(f"\n[bold cyan]── 第 {self.step} 步 ──[/]")
             reasoning = (p.get("reasoning") or "").strip()
-            if reasoning and show_thinking:
+            if reasoning and self.show_thinking:
                 console.print(Panel(escape(reasoning), title="[dim]思考[/]",
                                     title_align="left", border_style="dim", padding=(0, 1)))
             text = (p.get("text") or "").strip()
@@ -70,6 +76,13 @@ def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
             console.print(Panel(f"[red]{escape(str(p.get('message', '')))}[/]",
                                 title="[red]调用失败[/]", title_align="left",
                                 border_style="red", padding=(0, 1)))
+
+
+def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
+    """渲染一整段事件（重放用）。实时跑走 ``Renderer`` 逐个喂，边跑边显示。"""
+    r = Renderer(show_thinking=show_thinking)
+    for e in events:
+        r(e)
 
 
 def _answer_panel(sql: str, sandbox: Sandbox | None) -> str:
@@ -231,15 +244,18 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"[dim]带上已确认的业务口径 {evidence.count('- ')} 条[/]")
     ask = None if args.no_ask else _make_ask(terms, terms_path)
 
+    renderer = Renderer(show_thinking=not args.no_thinking)
+    events: list[AgentEvent] = []
     started = time.perf_counter()
-    events = list(core.run(
+    for e in core.run(
         args.question, provider=provider, sandbox=sandbox, schema=schema,
         dialect=sandbox.dialect, evidence=evidence, max_steps=args.max_steps,
         max_tokens=router.max_tokens_for("sql_gen"), ask=ask,
-    ))
+    ):
+        events.append(e)
+        renderer(e)          # 边跑边打，不攒到最后
     wall = time.perf_counter() - started
 
-    render(events, show_thinking=not args.no_thinking)
     out = core.consume(iter(events))
     preview = _answer_panel(out.sql, sandbox)
     # 结论在循环之外：循环只负责产出 SQL，结论要等 SQL 真跑完才有数据可依据。
