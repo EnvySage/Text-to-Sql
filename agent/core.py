@@ -129,12 +129,15 @@ def run(
             # 先产出 tool_call 再执行：消费者要在结果之前看到这次调用。
             yield AgentEvent("tool_call", {"name": tc.name, "args": tc.args})
             res = sandbox.run(str(tc.args.get("sql", "")))
-            yield AgentEvent("tool_result", {
-                "name": tc.name, "ok": res.ok, "rows": len(res.rows), "error": res.error,
-            })
             # to_markdown 只给前 20 行：结果集最多 2000 行，全塞进 context 太贵。
+            # 同一份文本也放进事件里——界面要显示"模型当时看到了什么"。
+            preview = res.to_markdown()
+            yield AgentEvent("tool_result", {
+                "name": tc.name, "ok": res.ok, "rows": len(res.rows),
+                "error": res.error, "preview": preview,
+            })
             results.append(ToolResult(
-                call_id=tc.id, content=res.to_markdown(), is_error=not res.ok))
+                call_id=tc.id, content=preview, is_error=not res.ok))
         messages.append(Message.results(results))
 
     yield AgentEvent("final", {
