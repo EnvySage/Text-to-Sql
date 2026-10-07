@@ -8,3 +8,6 @@ traces.db
 .pytest_cache/
 eval/datasets/bird_minidev/
 .idea/
+
+# 术语表：模型问用户后攒下来的业务口径，属于使用者的数据
+terms.json
