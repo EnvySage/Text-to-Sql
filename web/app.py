@@ -159,7 +159,7 @@ def _show_table(preview: str) -> None:
     if parsed:
         head, rows, notes = parsed
         st.dataframe([dict(zip(head, r)) for r in rows],
-                     use_container_width=True, hide_index=True)
+                     width='stretch', hide_index=True)
         for n in notes:
             st.caption(n)
     else:
@@ -167,7 +167,11 @@ def _show_table(preview: str) -> None:
 
 
 def _render_timeline(events, *, show_thinking: bool) -> None:
-    """把整段过程画出来。跑完或重放时用——运行中只显示进度，避免每 0.5 秒重建整页。"""
+    """把整段过程画出来。**运行中也调**——每 0.5 秒重画一次，所以时间线是长出来的。
+
+    思考**不用折叠框**：页面每次刷新都会重建，折叠框的展开状态会被重置，
+    用户每半秒被弹回去一次。常显反而能用，而且思考本来就是这个界面最该看的东西。
+    """
     step = 0
     for e in events:
         p = e.payload
@@ -175,7 +179,8 @@ def _render_timeline(events, *, show_thinking: bool) -> None:
             step = p.get("step", step)
             st.markdown(f"#### 第 {step} 步")
             if show_thinking and (p.get("reasoning") or "").strip():
-                with st.expander("💭 思考", expanded=False):
+                with st.container(border=True):
+                    st.caption("💭 思考")
                     st.markdown(p["reasoning"])
             if (p.get("text") or "").strip():
                 st.markdown(p["text"])
@@ -184,8 +189,7 @@ def _render_timeline(events, *, show_thinking: bool) -> None:
             args = p.get("args") or {}
             if name == "ask_user":
                 st.info(f"❓ 问用户：{args.get('question', '')}")
-                cands = args.get("candidates") or []
-                for i, c in enumerate(cands, 1):
+                for i, c in enumerate(args.get("candidates") or [], 1):
                     st.caption(f"　{i}. {c}")
             else:
                 st.markdown(f"**▸ {name}**")
@@ -267,11 +271,15 @@ if run is not None:
         @st.fragment(run_every=0.5)
         def live() -> None:
             events, pending, done, error, _ = run.snapshot()
-            if error:
-                st.error(f"跑不起来：{error}")
+            if done or error:
+                # 跑完了：整页重跑一次，退出轮询，交给下面那个分支一次性渲染
+                st.rerun()
                 return
-            if done:
-                return
+            step = max((e.payload.get("step", 0) for e in events
+                        if e.type == "step_start"), default=0)
+            calls = sum(1 for e in events if e.type == "tool_call")
+            st.caption(f"⏳ 跑着… 第 {step} 步 · 已调 {calls} 次工具")
+            _render_timeline(events, show_thinking=show_thinking)   # ← 边跑边长
             if pending:
                 st.warning(f"❓ **{pending.get('question', '')}**")
                 cands = [str(c) for c in (pending.get("candidates") or []) if str(c).strip()]
@@ -283,17 +291,10 @@ if run is not None:
                 if st.button("提交", key="ask_submit") and other.strip():
                     run.answer(other.strip())
                     st.rerun()
-                return
-            step = max((e.payload.get("step", 0) for e in events
-                        if e.type == "step_start"), default=0)
-            calls = sum(1 for e in events if e.type == "tool_call")
-            st.status(f"跑着… 第 {step} 步 · 已调 {calls} 次工具", state="running")
 
         live()
-
-    events, pending, done, error, result = run.snapshot()
-
-    if done:
+    else:
+        events, pending, done, error, result = run.snapshot()
         if error:
             st.error(f"跑不起来：{error}")
         _render_timeline(events, show_thinking=show_thinking)
