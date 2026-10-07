@@ -25,38 +25,10 @@ from agent.events import AgentEvent
 from agent.schema import schema_text
 from llm.router import Router
 from sandbox import open_sandbox
-from sandbox.base import ExecResult, Sandbox
+from sandbox.base import Sandbox
+from sandbox.deny import DenyColumns
 
 console = Console()
-
-
-class DenyColumns:
-    """拦住会碰到敏感列的查询——把沙箱包一层。
-
-    按列名做**文本匹配**：粗，但对"别把日记原文/API 密钥/向量查出来"这个目的够用，
-    而且不用解析 SQL。宁可误拦，不可放过。
-
-    这不是替代沙箱的防线，是在它前面再加一道业务口径的门——guard 管"能不能写"，
-    这里管"能不能看"。
-    """
-
-    def __init__(self, sandbox: Sandbox, columns: Iterable[str]) -> None:
-        self._sb = sandbox
-        self._cols = sorted({c.strip().lower() for c in columns if c.strip()})
-
-    @property
-    def dialect(self) -> str:
-        return self._sb.dialect
-
-    def run(self, sql: str, *, enforce_limit: bool = True) -> ExecResult:
-        low = sql.lower()
-        hit = next((c for c in self._cols if c in low), None)
-        if hit:
-            return ExecResult(
-                ok=False, sql=sql,
-                error=f"列 {hit!r} 被禁查（可能含隐私数据）。换一列，或问用户要授权。",
-            )
-        return self._sb.run(sql, enforce_limit=enforce_limit)
 
 
 def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
