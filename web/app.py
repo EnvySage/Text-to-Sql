@@ -145,10 +145,14 @@ if run:
             ))
             wall = time.perf_counter() - started
         out = core.consume(iter(events))
+        # 结论在循环之外：循环只负责产出 SQL，结论要等 SQL 真跑完才有数据可依据。
+        res = sandbox.run(out.sql) if out.sql else None
+        preview = res.to_markdown(max_rows=20) if (res is not None and res.ok) else ""
+        conclusion, _ = core.conclude(question, out.sql, preview, provider=provider)
         st.session_state.trace = {
             "question": question, "db": str(db), "dialect": sandbox.dialect,
             "events": [{"type": e.type, "payload": e.payload} for e in events],
-            "final_sql": out.sql,
+            "final_sql": out.sql, "preview": preview, "conclusion": conclusion,
             "cost": {
                 "steps": out.steps, "tool_calls": out.tool_calls, "wall": wall,
                 "input": out.usage.input_tokens, "output": out.usage.output_tokens,
@@ -177,6 +181,21 @@ if trace:
         st.code(trace["final_sql"], language="sql")
     else:
         st.warning("没有产出 SQL")
+
+    if trace.get("preview"):
+        parsed = _table(trace["preview"])
+        if parsed:
+            head, rows, notes = parsed
+            st.dataframe([dict(zip(head, r)) for r in rows],
+                         use_container_width=True, hide_index=True)
+            for n in notes:
+                st.caption(n)
+        else:
+            st.code(trace["preview"], language="text")
+
+    if trace.get("conclusion"):
+        st.subheader("结论")
+        st.success(trace["conclusion"])
 
     c = trace.get("cost") or {}
     if c:

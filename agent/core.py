@@ -158,3 +158,37 @@ def consume(events: Iterator[AgentEvent]) -> AgentOutcome:
             out.hit_cap = p.get("hit_cap", False)
             out.usage = e.usage or Usage()
     return out
+
+
+CONCLUSION_SYSTEM = """你是数据分析助手。用户问了一个问题，下面给了查询用的 SQL 和真实结果。
+用中文简洁回答用户的问题：直接给结论和关键数字，不要重复 SQL，不要解释你做了什么。
+数字必须来自给的结果，不要自己推算或补充。"""
+
+
+def conclude(
+    question: str, sql: str, preview: str, *,
+    provider: LLMProvider, max_tokens: int = 1024,
+) -> tuple[str, Usage]:
+    """拿最终 SQL 和它的真实结果，让模型给一句人话结论。
+
+    这一步在循环**之外**：循环的契约是"产出 SQL"，而结论要等 SQL 真跑完才有数据可依据。
+    数字只准来自 ``preview``——所以先把结果给出去，再让它说。
+
+    返回 ``(结论文字, 用量)``；拿不到结果或调用失败时返回空串，不抛异常。
+    """
+    if not sql or not preview.strip():
+        return "", Usage()
+    prompt = (
+        f"用户的问题：{question}\n\n"
+        f"查询用的 SQL：\n{sql}\n\n"
+        f"查询结果：\n{preview}\n\n"
+        f"请回答用户的问题。"
+    )
+    try:
+        resp = provider.chat(
+            system=CONCLUSION_SYSTEM, messages=[Message.user(prompt)],
+            tools=None, max_tokens=max_tokens,
+        )
+    except LLMError:
+        return "", Usage()
+    return (resp.text or "").strip(), resp.usage

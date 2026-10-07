@@ -66,22 +66,23 @@ def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
                                 title_align="left", border_style="red", padding=(0, 1)))
 
 
-def _answer_panel(sql: str, sandbox: Sandbox | None) -> None:
-    """把最终 SQL 真跑一遍，把答案显示出来。没有沙箱（重放）时只显示 SQL。"""
+def _answer_panel(sql: str, sandbox: Sandbox | None) -> str:
+    """渲染最终 SQL 和它的结果，**返回结果预览**——结论那一步要靠它给数字。"""
     if not sql:
         console.print(Panel("[yellow]没有产出 SQL[/]", border_style="yellow"))
-        return
+        return ""
     console.print(Panel(Syntax(sql, "sql", theme="ansi_dark", word_wrap=True),
                         title="最终 SQL", title_align="left", border_style="cyan"))
     if sandbox is None:
-        return
+        return ""
     res = sandbox.run(sql)
     if res.ok:
         console.print(Panel(res.to_markdown(max_rows=20), title=f"答案 · {len(res.rows)} 行",
                             title_align="left", border_style="cyan", padding=(0, 1)))
-    else:
-        console.print(Panel(f"[red]{res.error}[/]", title="最终 SQL 跑不通",
-                            title_align="left", border_style="red"))
+        return res.to_markdown(max_rows=20)
+    console.print(Panel(f"[red]{res.error}[/]", title="最终 SQL 跑不通",
+                        title_align="left", border_style="red"))
+    return ""
 
 
 def _cost_panel(out: core.AgentOutcome, wall_s: float) -> None:
@@ -126,7 +127,14 @@ def main(argv: list[str] | None = None) -> int:
         console.print(Panel(f"[bold]{raw.get('question', '')}[/]\n[dim]{raw.get('db', '')}[/]",
                             title="重放", title_align="left", border_style="blue", padding=(0, 1)))
         render(_events_from_trace(raw.get("events") or []), show_thinking=not args.no_thinking)
+        preview = raw.get("preview") or ""
         _answer_panel(raw.get("final_sql", ""), None)
+        if preview:
+            console.print(Panel(preview, title="答案", title_align="left",
+                                border_style="cyan", padding=(0, 1)))
+        if raw.get("conclusion"):
+            console.print(Panel(raw["conclusion"], title="结论", title_align="left",
+                                border_style="green", padding=(0, 1)))
         return 0
 
     if not args.db or not args.question:
@@ -159,13 +167,19 @@ def main(argv: list[str] | None = None) -> int:
 
     render(events, show_thinking=not args.no_thinking)
     out = core.consume(iter(events))
-    _answer_panel(out.sql, sandbox)
+    preview = _answer_panel(out.sql, sandbox)
+    # 结论在循环之外：循环只负责产出 SQL，结论要等 SQL 真跑完才有数据可依据。
+    conclusion, _ = core.conclude(args.question, out.sql, preview, provider=provider)
+    if conclusion:
+        console.print(Panel(conclusion, title="结论", title_align="left",
+                            border_style="green", padding=(0, 1)))
     _cost_panel(out, wall)
 
     if args.save_trace:
         Path(args.save_trace).write_text(json.dumps({
             "question": args.question, "db": str(args.db), "dialect": sandbox.dialect,
             "events": _trace_events(events), "final_sql": out.sql,
+            "preview": preview, "conclusion": conclusion,
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         console.print(f"[dim]轨迹已存到 {args.save_trace}（可用 --replay 重放，不花钱）[/]")
 

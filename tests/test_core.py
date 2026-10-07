@@ -153,6 +153,37 @@ def test_step_start_carries_reasoning_and_text():
     assert events[0].payload["text"] == "我看看有哪些管理员字段"
 
 
+def test_conclude_sends_sql_and_result_to_the_model():
+    """结论的数字只能来自给出去的结果——所以 prompt 里必须同时有 SQL 和结果。"""
+    p = FakeProvider([_resp(text="一共有 180 条记录。")])
+    text, _ = core.conclude(
+        "有多少条记录？", "SELECT count(*) FROM records", "count\n180", provider=p,
+    )
+    assert text == "一共有 180 条记录。"
+    prompt = p.calls[0]["messages"][0].text
+    assert "SELECT count(*) FROM records" in prompt and "180" in prompt
+    assert p.calls[0]["tools"] is None      # 结论步骤不调工具
+
+
+def test_conclude_skips_without_a_result():
+    """SQL 没产出、或结果为空时不调模型——没数据可依据，硬问只会让它编。"""
+    p = FakeProvider([_resp(text="不该被调用")])
+    assert core.conclude("问", "SELECT 1", "", provider=p)[0] == ""
+    assert core.conclude("问", "", "count\n1", provider=p)[0] == ""
+    assert p.calls == []
+
+
+def test_conclude_swallows_llm_error():
+    """结论失败不该炸掉整轮——返回空串，主流程照常显示 SQL 和结果。"""
+    class Boom:
+        name = model = "boom"
+
+        def chat(self, **kwargs):
+            raise LLMError("网关挂了", provider="fake")
+
+    assert core.conclude("问", "SELECT 1", "count\n1", provider=Boom())[0] == ""
+
+
 def test_llm_error_converges_to_error_event():
     """provider 抛 LLMError：收敛成 error 事件，不冒泡。"""
     class BoomProvider:
