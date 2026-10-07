@@ -176,7 +176,7 @@ def _load_schema_mysql(db: str | Path, *, sample_rows: int) -> list[Table]:
 
     列名里空格和保留字（``order``、``key``、``desc``）都很常见，不加引号写不出合法 SQL。
     """
-    conn = connect_readonly(str(db))
+    conn = connect_mysql_readonly(str(db))
     try:
         tables: dict[str, Table] = {}
         with conn.cursor() as cur:
