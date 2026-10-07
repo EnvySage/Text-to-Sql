@@ -182,8 +182,27 @@ def run(
                 call_id=tc.id, content=preview, is_error=not res.ok))
         messages.append(Message.results(results))
 
+    # 撞上限：不再让它探索，**逼它交一份最好的答案**。
+    # 10 步烧完却什么都没产出是最差的结果——钱花了、结论没有。实测踩过：
+    # 一道模糊问题撞上限，560K 输入 token 换来一句"没有产出 SQL"。
+    messages.append(Message.user(
+        "已经到步数上限，不要再调用工具。根据你已经看到的数据，"
+        "现在给出你最好的那条 SELECT 语句。"
+    ))
+    try:
+        resp = provider.chat(
+            system=system_prompt(dialect), messages=messages,
+            tools=None, max_tokens=max_tokens,
+        )
+        usage = usage + resp.usage
+        forced = baseline.extract_sql(resp.text)
+        yield AgentEvent("step_start", {
+            "step": max_steps + 1, "reasoning": resp.reasoning, "text": resp.text or "",
+        })
+    except (LLMError, ValueError):
+        forced = ""
     yield AgentEvent("final", {
-        "sql": "", "steps": max_steps, "tool_calls": n_calls, "hit_cap": True,
+        "sql": forced, "steps": max_steps, "tool_calls": n_calls, "hit_cap": True,
     }, usage=usage)
 
 

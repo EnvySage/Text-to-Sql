@@ -86,15 +86,37 @@ def test_tool_result_carries_real_rows():
     assert results[0].tool_results[0].is_error is False
 
 
-def test_max_steps_marks_hit_cap():
-    """模型一直试跑不收工：撞上限，hit_cap=True，不抛异常。"""
+def test_max_steps_forces_a_final_answer():
+    """撞上限时不再让它探索，逼它交一份最好的答案。
+
+    实测踩过：10 步烧完 560K token，最后一句"没有产出 SQL"——钱花了、结论没有。
+    """
     script = [_resp(calls=[ToolCall(f"c{i}", "execute_sql", {"sql": "SELECT a FROM t"})])
               for i in range(3)]
-    _, events, out = _run(script, max_steps=3)
+    script.append(_resp(text="```sql\nSELECT a FROM t LIMIT 1\n```"))   # 收尾那一次
+    p, events, out = _run(script, max_steps=3)
     assert out.hit_cap is True
     assert out.steps == 3
     assert out.tool_calls == 3
+    assert out.sql == "SELECT a FROM t LIMIT 1"      # ← 有答案，不是空串
+    assert p.calls[3]["tools"] is None               # 收尾那次不给工具，逼它开口
     assert events[-1].type == "final"
+
+
+def test_max_steps_survives_a_failing_forced_call():
+    """收尾那次调用也挂了：仍然返回 final，不抛异常。"""
+    class Flaky(FakeProvider):
+        def chat(self, **kwargs):
+            if kwargs.get("tools") is None:
+                raise LLMError("收尾也挂了", provider="fake")
+            return super().chat(**kwargs)
+
+    script = [_resp(calls=[ToolCall("c1", "execute_sql", {"sql": "SELECT a FROM t"})])]
+    p = Flaky(script)
+    events = list(core.run("问题", provider=p, sandbox=FakeSandbox(),
+                           schema="", dialect="sqlite", max_steps=1))
+    out = core.consume(iter(events))
+    assert out.hit_cap is True and out.sql == ""
 
 
 def test_text_only_falls_back_to_extract():
