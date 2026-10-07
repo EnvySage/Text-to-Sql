@@ -184,6 +184,73 @@ def test_conclude_swallows_llm_error():
     assert core.conclude("问", "SELECT 1", "count\n1", provider=Boom())[0] == ""
 
 
+def test_ask_user_tool_only_offered_when_callback_given():
+    """评测路径的工具集必须逐字节不变——不给 ask 就不挂 ask_user。"""
+    base = dict(sandbox=FakeSandbox(), schema="", dialect="sqlite")
+    p1 = FakeProvider([_resp(calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})])])
+    list(core.run("问题", provider=p1, **base))
+    assert [t.name for t in p1.calls[0]["tools"]] == ["execute_sql", "submit_sql"]
+
+    p2 = FakeProvider([_resp(calls=[ToolCall("c1", "submit_sql", {"sql": "SELECT 1"})])])
+    list(core.run("问题", provider=p2, ask=lambda a: "答", **base))
+    assert "ask_user" in [t.name for t in p2.calls[0]["tools"]]
+
+
+def test_ask_user_feeds_the_answer_back_to_the_model():
+    asked = []
+
+    def _ask(args):
+        asked.append(args)
+        return "用户确认：复购 = 同一客户下单超过一次"
+
+    script = [
+        _resp(calls=[ToolCall("c1", "ask_user", {
+            "term": "复购", "question": "复购是指什么？",
+            "candidates": ["同一客户下单超过一次", "同一店铺下单超过一次"]})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
+    ]
+    p = FakeProvider(script)
+    list(core.run("复购率是多少", provider=p, sandbox=FakeSandbox(), schema="",
+                  dialect="sqlite", ask=_ask))
+    assert asked and asked[0]["term"] == "复购"
+    results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert "同一客户下单超过一次" in results[0].tool_results[0].content
+
+
+def test_ask_user_without_a_user_degrades_and_continues():
+    """用户不在场时必须让它继续——卡着等一个不会来的回答，比猜错更糟。"""
+    script = [
+        _resp(calls=[ToolCall("c1", "ask_user", {"term": "复购", "question": "?"})]),
+        _resp(calls=[ToolCall("c2", "submit_sql", {"sql": "SELECT 1"})]),
+    ]
+    p = FakeProvider(script)
+    events = list(core.run("复购率", provider=p, sandbox=FakeSandbox(), schema="",
+                           dialect="sqlite"))          # 不给 ask
+    results = [m for m in p.calls[1]["messages"] if m.tool_results]
+    assert "用户不在场" in results[0].tool_results[0].content
+    assert core.consume(iter(events)).sql == "SELECT 1"
+
+
+def test_ask_user_caps_the_number_of_questions():
+    """问多了烦人，也说明 prompt 没讲清楚。超了就直接回「不能再问」。"""
+    hits = []
+
+    def _ask(args):
+        hits.append(1)
+        return "答"
+
+    script = [
+        _resp(calls=[ToolCall(f"c{i}", "ask_user", {"term": f"t{i}", "question": "?"})])
+        for i in range(core.MAX_ASKS + 2)
+    ]
+    script.append(_resp(calls=[ToolCall("c9", "submit_sql", {"sql": "SELECT 1"})]))
+    p = FakeProvider(script)
+    events = list(core.run("问", provider=p, sandbox=FakeSandbox(), schema="",
+                           dialect="sqlite", ask=_ask))
+    assert len(hits) == core.MAX_ASKS
+    assert core.consume(iter(events)).sql == "SELECT 1"
+
+
 def test_llm_error_converges_to_error_event():
     """provider 抛 LLMError：收敛成 error 事件，不冒泡。"""
     class BoomProvider:

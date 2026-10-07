@@ -29,4 +29,28 @@ SUBMIT_SQL = ToolSpec(
     },
 )
 
+ASK_USER = ToolSpec(
+    name="ask_user",
+    description=(
+        "当问题里的**业务名词**含义不明确、而且不同解释会写出不同的 SQL 时，问用户。"
+        "一次只问一个词。**不要问表结构**——那可以用 execute_sql 自己查。"
+        "**必须给候选**，用户点一个就行。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "term": {"type": "string", "description": "不明确的业务名词，如「复购」"},
+            "question": {"type": "string", "description": "要问用户的具体问题"},
+            "candidates": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "2-3 个候选解释，覆盖最可能的理解",
+            },
+        },
+        "required": ["term", "question", "candidates"],
+    },
+)
+
+# 默认工具集。``ask_user`` 不在里面——它要有真人在场才有意义，
+# 由 ``core.run(ask=...)`` 决定要不要加上去（见那个函数的说明）。
 TOOLS: list[ToolSpec] = [EXECUTE_SQL, SUBMIT_SQL]

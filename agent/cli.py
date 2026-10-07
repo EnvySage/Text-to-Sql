@@ -17,6 +17,7 @@ from typing import Iterable, Iterator
 
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 
@@ -32,7 +33,11 @@ console = Console()
 
 
 def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
-    """渲染事件流。实时跑和重放走的是同一个函数。"""
+    """渲染事件流。实时跑和重放走的是同一个函数。
+
+    **模型说的话和查出来的数据都要 ``escape``**：它们里面可能有 ``[`` 之类的字符，
+    rich 会当成标记去解析，轻则显示错乱，重则直接抛 MarkupError 把整个程序打断。
+    """
     step = 0
     for e in events:
         p = e.payload
@@ -41,14 +46,14 @@ def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
             console.print(f"\n[bold cyan]── 第 {step} 步 ──[/]")
             reasoning = (p.get("reasoning") or "").strip()
             if reasoning and show_thinking:
-                console.print(Panel(reasoning, title="[dim]思考[/]", title_align="left",
-                                    border_style="dim", padding=(0, 1)))
+                console.print(Panel(escape(reasoning), title="[dim]思考[/]",
+                                    title_align="left", border_style="dim", padding=(0, 1)))
             text = (p.get("text") or "").strip()
             if text:
-                console.print(Panel(text, title="[dim]输出[/]", title_align="left",
-                                    border_style="dim", padding=(0, 1)))
+                console.print(Panel(escape(text), title="[dim]输出[/]",
+                                    title_align="left", border_style="dim", padding=(0, 1)))
         elif e.type == "tool_call":
-            console.print(f"  [bold]▸ {p.get('name', '')}[/]")
+            console.print(f"  [bold]▸ {escape(str(p.get('name', '')))}[/]")
             sql = (p.get("args") or {}).get("sql")
             if sql:
                 console.print(Syntax(str(sql), "sql", theme="ansi_dark", word_wrap=True,
@@ -58,12 +63,13 @@ def render(events: Iterable[AgentEvent], *, show_thinking: bool = True) -> None:
                 console.print(f"  [green]← {p.get('rows', 0)} 行[/]")
                 preview = (p.get("preview") or "").strip()
                 if preview:
-                    console.print(Panel(preview, border_style="green", padding=(0, 1)))
+                    console.print(Panel(escape(preview), border_style="green", padding=(0, 1)))
             else:
-                console.print(f"  [red]← 失败：{p.get('error', '')}[/]")
+                console.print(f"  [red]← 失败：{escape(str(p.get('error', '')))}[/]")
         elif e.type == "error":
-            console.print(Panel(f"[red]{p.get('message', '')}[/]", title="[red]调用失败[/]",
-                                title_align="left", border_style="red", padding=(0, 1)))
+            console.print(Panel(f"[red]{escape(str(p.get('message', '')))}[/]",
+                                title="[red]调用失败[/]", title_align="left",
+                                border_style="red", padding=(0, 1)))
 
 
 def _answer_panel(sql: str, sandbox: Sandbox | None) -> str:
@@ -77,10 +83,11 @@ def _answer_panel(sql: str, sandbox: Sandbox | None) -> str:
         return ""
     res = sandbox.run(sql)
     if res.ok:
-        console.print(Panel(res.to_markdown(max_rows=20), title=f"答案 · {len(res.rows)} 行",
+        md = res.to_markdown(max_rows=20)
+        console.print(Panel(escape(md), title=f"答案 · {len(res.rows)} 行",
                             title_align="left", border_style="cyan", padding=(0, 1)))
-        return res.to_markdown(max_rows=20)
-    console.print(Panel(f"[red]{res.error}[/]", title="最终 SQL 跑不通",
+        return md
+    console.print(Panel(f"[red]{escape(res.error)}[/]", title="最终 SQL 跑不通",
                         title_align="left", border_style="red"))
     return ""
 
@@ -105,6 +112,61 @@ def _events_from_trace(raw: list[dict]) -> Iterator[AgentEvent]:
         yield AgentEvent(r["type"], r.get("payload") or {})
 
 
+def _load_terms(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _terms_for(question: str, terms: dict[str, str]) -> str:
+    """只把**问题里出现过**的术语拼进 prompt。
+
+    整张术语表塞进去只会稀释注意力，而且术语多了 prompt 会失控。
+    """
+    hits = [f"- {t}：{d}" for t, d in terms.items() if t and t in question]
+    return "已确认的业务口径：\n" + "\n".join(hits) if hits else ""
+
+
+def _make_ask(terms: dict[str, str], path: Path | None):
+    """做一个问用户的回调。答过的记进术语表，下次不再问。"""
+
+    def _ask(args: dict) -> str:
+        term = str(args.get("term", "")).strip()
+        question = str(args.get("question", "")).strip()
+        cands = [str(c).strip() for c in (args.get("candidates") or []) if str(c).strip()]
+        body = question or f"「{term}」是什么意思？"
+        for i, c in enumerate(cands, 1):
+            body += f"\n  [bold]{i}.[/] {c}"
+        body += f"\n  [bold]{len(cands) + 1}.[/] 其他（我来说）"
+        console.print(Panel(body, title=f"❓ 需要确认：{term or '业务口径'}",
+                            title_align="left", border_style="yellow", padding=(0, 1)))
+
+        raw = console.input("[yellow]你的选择[/] > ").strip()
+        answer = raw
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(cands):
+                answer = cands[n - 1]
+            elif n == len(cands) + 1:
+                answer = console.input("  请说明：").strip()
+        if not answer:
+            answer = cands[0] if cands else "按最合理的解释"
+        console.print(f"  [green]→ {answer}[/]")
+
+        if term:
+            terms[term] = answer
+            if path is not None:
+                path.write_text(json.dumps(terms, ensure_ascii=False, indent=1),
+                                encoding="utf-8")
+        return f"用户确认：{term} = {answer}" if term else f"用户回答：{answer}"
+
+    return _ask
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     ap = argparse.ArgumentParser(description="数据分析 agent 的命令行界面")
@@ -118,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--deny-columns", default="",
                     help="禁查列名（逗号分隔）。会碰到这些列的查询直接被拒——"
                          "给含隐私数据的库用，如 content,embedding,password_hash")
+    ap.add_argument("--terms", metavar="FILE", default="terms.json",
+                    help="业务口径术语表（JSON）。模型不确定时会问用户，答过的记在这里，"
+                         "下次提问自动带上、不再问。默认 terms.json")
+    ap.add_argument("--no-ask", action="store_true",
+                    help="不让模型问用户（工具集退回 execute_sql + submit_sql）")
     args = ap.parse_args(argv)
 
     deny = [c for c in args.deny_columns.split(",") if c.strip()]
@@ -130,10 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         preview = raw.get("preview") or ""
         _answer_panel(raw.get("final_sql", ""), None)
         if preview:
-            console.print(Panel(preview, title="答案", title_align="left",
+            console.print(Panel(escape(preview), title="答案", title_align="left",
                                 border_style="cyan", padding=(0, 1)))
         if raw.get("conclusion"):
-            console.print(Panel(raw["conclusion"], title="结论", title_align="left",
+            console.print(Panel(escape(raw["conclusion"]), title="结论", title_align="left",
                                 border_style="green", padding=(0, 1)))
         return 0
 
@@ -157,11 +224,18 @@ def main(argv: list[str] | None = None) -> int:
 
     import time
 
+    terms_path = Path(args.terms) if args.terms else None
+    terms = _load_terms(terms_path)
+    evidence = _terms_for(args.question, terms)
+    if evidence:
+        console.print(f"[dim]带上已确认的业务口径 {evidence.count('- ')} 条[/]")
+    ask = None if args.no_ask else _make_ask(terms, terms_path)
+
     started = time.perf_counter()
     events = list(core.run(
         args.question, provider=provider, sandbox=sandbox, schema=schema,
-        dialect=sandbox.dialect, max_steps=args.max_steps,
-        max_tokens=router.max_tokens_for("sql_gen"),
+        dialect=sandbox.dialect, evidence=evidence, max_steps=args.max_steps,
+        max_tokens=router.max_tokens_for("sql_gen"), ask=ask,
     ))
     wall = time.perf_counter() - started
 
@@ -171,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     # 结论在循环之外：循环只负责产出 SQL，结论要等 SQL 真跑完才有数据可依据。
     conclusion, _ = core.conclude(args.question, out.sql, preview, provider=provider)
     if conclusion:
-        console.print(Panel(conclusion, title="结论", title_align="left",
+        console.print(Panel(escape(conclusion), title="结论", title_align="left",
                             border_style="green", padding=(0, 1)))
     _cost_panel(out, wall)
 

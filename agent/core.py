@@ -8,16 +8,26 @@ CLI / Web 将来都挂在这套事件流上。见 docs/DESIGN.md 4.4。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Callable, Iterator
 
 from agent import baseline, baseline_dialect
 from agent.events import AgentEvent
-from agent.tools import TOOLS
+from agent.tools import ASK_USER, TOOLS
 from llm.base import LLMError, LLMProvider, Message, ToolResult, Usage
 from sandbox.base import Sandbox
 
 # 防跑飞的兜底，不是预算：正常模型 1-3 步交卷，撞到它说明模型绕不出来。
 MAX_STEPS_DEFAULT = 10
+
+# 一轮里最多问用户几次。问多了烦人，而且说明 prompt 没讲清楚。
+MAX_ASKS = 3
+
+# 用户不在场（评测、无人值守）时回给模型的话。**必须让它继续**——
+# 卡在这里等一个永远不会来的回答，比猜错更糟。
+NO_USER = (
+    "用户不在场，无法回答。请按最合理的解释继续，"
+    "并在最终答案里注明你假设了什么。"
+)
 
 # 工具说明。拼在方言版 baseline prompt 后面，不是替掉它——
 # 跨方言对比要求只变方言这一个变量，工具说明对各方言必须逐字相同。
@@ -60,22 +70,28 @@ def run(
     evidence: str = "",
     max_steps: int = MAX_STEPS_DEFAULT,
     max_tokens: int = 8192,
+    ask: Callable[[dict], str] | None = None,
 ) -> Iterator[AgentEvent]:
     """跑一轮工具循环，产出事件流。最后必是一个 ``final`` 或 ``error``。
 
     ``dialect`` 决定 system prompt 里的方言名：PG 上跑却告诉模型"你是 SQLite 专家"
     不会报错，只会静默写错 SQL，所以这个参数不能由默认值兜住。
+
+    ``ask`` 是"问用户"的回调，给了才会把 ``ask_user`` 工具挂上去。**不给就不挂**——
+    评测路径的工具集因此逐字节不变，已有数字不受影响。回调收到工具参数，返回用户的回答。
     """
+    tools = [*TOOLS, ASK_USER] if ask is not None else TOOLS
     ev = f"\n业务口径说明：{evidence}\n" if evidence else ""
     messages = [Message.user(baseline.USER_TEMPLATE.format(
         schema=schema, evidence=ev, question=question))]
     usage = Usage()
     n_calls = 0
+    n_asks = 0
 
     for step in range(1, max_steps + 1):
         try:
             resp = provider.chat(
-                system=system_prompt(dialect), messages=messages, tools=TOOLS,
+                system=system_prompt(dialect), messages=messages, tools=tools,
                 max_tokens=max_tokens,
             )
             # Usage.__add__ 遇到混合 cost_unit 会抛 ValueError。放在 try 里收敛成
@@ -115,6 +131,22 @@ def run(
                     "steps": step, "tool_calls": n_calls, "hit_cap": False,
                 }, usage=usage)
                 return
+            if tc.name == "ask_user":
+                n_asks += 1
+                asked = tc.args if isinstance(tc.args, dict) else {}
+                if ask is None:
+                    answer = NO_USER
+                elif n_asks > MAX_ASKS:
+                    answer = f"这一轮已经问过 {MAX_ASKS} 次，不能再问了。" + NO_USER
+                else:
+                    answer = ask(asked)
+                yield AgentEvent("tool_call", {"name": tc.name, "args": asked})
+                yield AgentEvent("tool_result", {
+                    "name": tc.name, "ok": True, "rows": 0, "error": "",
+                    "preview": answer,
+                })
+                results.append(ToolResult(call_id=tc.id, content=answer, is_error=False))
+                continue
             if tc.name != "execute_sql":
                 # 未知工具也发一对事件：轨迹里要能看出模型喊了什么、被回了什么，
                 # 否则消费方看到 tool_calls 计数涨了却少一段经过。

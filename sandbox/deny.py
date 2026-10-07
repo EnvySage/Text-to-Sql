@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 from sandbox.base import ExecResult, Sandbox
@@ -17,16 +18,21 @@ from sandbox.base import ExecResult, Sandbox
 class DenyColumns:
     """按列名拦查询——把沙箱包一层。
 
-    **文本匹配，不解析 SQL**：粗，但对"别把日记原文查出来"这个目的够用，
+    **词边界匹配，不解析 SQL**：粗，但对"别把日记原文查出来"这个目的够用，
     而且不会因为解析器理解偏差而漏。宁可误拦，不可放过。
 
-    代价：列名是子串匹配，``content`` 会连 ``content_hit_count`` 一起拦掉。
-    禁查名单要按库的实际列名挑，别放太泛的词。
+    **必须按词边界，不能按子串**：实测过——子串匹配会把 ``metadata`` 当成 ``data``、
+    把 ``content_hit_count`` 当成 ``content`` 拦下来。列名里的 ``_`` 算词字符，
+    所以 ``\\b`` 正好卡在列名边界上，不会误伤。
     """
 
     def __init__(self, sandbox: Sandbox, columns: Iterable[str]) -> None:
         self._sb = sandbox
         self._cols = sorted({c.strip().lower() for c in columns if c.strip()})
+        self._pattern = (
+            re.compile(r"\b(" + "|".join(re.escape(c) for c in self._cols) + r")\b")
+            if self._cols else None
+        )
 
     @property
     def dialect(self) -> str:
@@ -37,11 +43,10 @@ class DenyColumns:
         return list(self._cols)
 
     def run(self, sql: str, *, enforce_limit: bool = True) -> ExecResult:
-        low = sql.lower()
-        hit = next((c for c in self._cols if c in low), None)
+        hit = self._pattern.search(sql.lower()) if self._pattern else None
         if hit:
             return ExecResult(
                 ok=False, sql=sql,
-                error=f"列 {hit!r} 被禁查（可能含隐私数据）。换一列，或让用户解除限制。",
+                error=f"列 {hit.group(1)!r} 被禁查（可能含隐私数据）。换一列，或让用户解除限制。",
             )
         return self._sb.run(sql, enforce_limit=enforce_limit)
